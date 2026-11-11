@@ -1,0 +1,30 @@
+[package]
+name = "metasafe"
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Inspect and remove JPEG metadata locally"
+license = "MIT"
+default-run = "metasafe"
+
+[features]
+default = ["gui"]
+gui = ["dep:eframe", "dep:rfd", "dep:sys-locale"]
+
+[[bin]]
+name = "metasafe-gui"
+path = "src/bin/metasafe-gui.rs"
+required-features = ["gui"]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+eframe = { version = "0.31", default-features = false, features = ["accesskit", "default_fonts", "glow", "persistence", "wayland", "x11"], optional = true }
+image = { version = "0.25.10", default-features = false, features = ["jpeg"] }
+kamadak-exif = "0.6.1"
+rfd = { version = "0.15", optional = true }
+sys-locale = { version = "0.3", optional = true }
+tempfile = "3"
+thiserror = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
