@@ -1,39 +1,39 @@
 # MetaSafe v0.3
 
-**Русский** · [English](README.en.md)
+[Русский](README.ru.md) · **English**
 
-MetaSafe просматривает метаданные JPEG и сохраняет проверенные копии. Можно очистить одну фотографию или обработать несколько файлов за раз. Всё выполняется на устройстве. Оригиналы сохраняются.
+MetaSafe inspects JPEG metadata and saves verified copies. It can clean one photo or process several files in a batch. All processing happens on your device, and the originals are preserved.
 
-## Быстрый запуск
+## Quick start
 
-Скачайте и распакуйте архив для своей системы. [Последний релиз на GitHub](https://github.com/V3rCg1/MetaSafe/releases/latest)
+Download and extract the archive for your system. [Latest GitHub release](https://github.com/V3rCg1/MetaSafe/releases/latest)
 
-### macOS на Apple Silicon
+### macOS on Apple Silicon
 
-Откройте Терминал. Перейдите в папку `package` внутри распакованного архива и запустите окно программы:
+Open Terminal, go to the `package` folder inside the extracted archive, and launch the desktop app:
 
 ```sh
 ./metasafe-gui
 ```
 
-Для командной строки используйте `./metasafe` из той же папки. Бинарники без подписи. macOS может показать предупреждение о разработчике.
+For the command-line interface, run `./metasafe` from the same folder. The binaries lack a publisher signature, so macOS may display a developer warning.
 
 ### Windows x64
 
-В распакованной папке запустите `metasafe-gui.exe` двойным щелчком. Для командной строки откройте PowerShell в той же папке и используйте `.\metasafe.exe`. Бинарники без подписи. Windows может показать предупреждение об издателе.
+Double-click `metasafe-gui.exe` in the extracted folder. For the command-line interface, open PowerShell in the same folder and run `.\metasafe.exe`. The binaries lack a publisher signature, so Windows may display a publisher warning.
 
-## Работа в окне программы
+## Desktop app
 
-1. Нажмите «Открыть JPEG» и выберите один или несколько файлов `.jpg` или `.jpeg`. Можно перетащить их в окно.
-2. Выберите фотографию в списке, чтобы увидеть превью и метаданные. Сведения EXIF могут содержать точные координаты.
-3. Для одного файла нажмите «Создать очищенную копию…» и укажите имя. Для нескольких нажмите «Создать очищенные копии…» и выберите папку.
-4. Дождитесь завершения и раскройте отчёт по нужному файлу.
+1. Click **Open JPEG** and select one or more `.jpg` or `.jpeg` files. You can also drag files into the window.
+2. Select a photo to see its preview and metadata. EXIF fields can contain precise coordinates.
+3. Click **Create cleaned copy…** for one file and choose a name. For multiple files, click **Create cleaned copies…** and choose a destination folder.
+4. When processing finishes, expand the report for any file.
 
-При пакетной обработке `photo.jpeg` сохраняется как `photo_clean.jpg`. Если это имя уже занято, программа сообщает об ошибке для этого файла и продолжает обработку остальных. Файлы с одинаковым базовым именем обрабатывайте в разные папки. Интерфейс следует теме системы. Язык можно переключить в правом верхнем углу.
+In batch mode, `photo.jpeg` becomes `photo_clean.jpg`. If that name already exists, MetaSafe reports an error for that file and continues with the rest. Use separate output folders for files with the same base name. The app follows the system theme. Use the language switcher in the upper-right corner to change the interface language.
 
-## Работа в командной строке
+## Command-line interface
 
-Пример для macOS. Замените имена путями к своим JPEG. Папка `cleaned` должна существовать до запуска пакетной очистки.
+On macOS, replace the example names with paths to your JPEG files. Create the `cleaned` folder before running batch cleanup.
 
 ```sh
 ./metasafe inspect "photo 1.jpg"
@@ -43,7 +43,7 @@ mkdir -p cleaned
 ./metasafe batch "photo 1.jpg" "photo 2.jpeg" --output-dir cleaned
 ```
 
-Пример для PowerShell:
+In PowerShell:
 
 ```powershell
 .\metasafe.exe inspect "photo 1.jpg"
@@ -53,29 +53,29 @@ New-Item -ItemType Directory -Force cleaned
 .\metasafe.exe batch "photo 1.jpg" "photo 2.jpeg" --output-dir cleaned
 ```
 
-- `inspect` показывает результаты анализа контейнера и поля EXIF.
-- `clean` применяет EXIF Orientation, сохраняет временную копию рядом с файлом назначения, проверяет её и публикует без перезаписи. При повреждённом EXIF или неоднозначной ориентации возвращает ошибку.
-- `verify` возвращает код 0, если проверки пройдены, 1, если найдены метаданные или проверка неполная, и 2 при ошибке ввода, чтения или декодирования.
-- `batch` возвращает код 0, если сохранены все копии, 1, если хотя бы один файл завершился ошибкой, и 2 при общей ошибке, например если папка назначения отсутствует.
+- `inspect` reports JPEG container metadata and EXIF fields.
+- `clean` applies EXIF orientation, saves and verifies a temporary copy beside the destination, then publishes it without overwriting an existing file. It returns an error if EXIF is malformed or orientation is ambiguous.
+- `verify` returns 0 if the checks pass, 1 if metadata is found or a check is incomplete, and 2 for an input, read, or decoding error.
+- `batch` returns 0 if all copies are saved, 1 if any file fails, and 2 for a command-level error such as a missing output directory.
 
-## Сборка из исходников
+## Build from source
 
-Нужен Rust 1.88 или новее. В корне проекта выполните:
+Install Rust 1.88 or later and run this from the project root:
 
 ```sh
 cargo build --release --locked --bins
 ```
 
-Исполняемые файлы появятся в `target/release`. Можно также установить оба приложения через `cargo install --path . --locked`. Для сборки только CLI используйте `cargo build --release --locked --no-default-features --bin metasafe`.
+The binaries are written to `target/release`. You can also install both with `cargo install --path . --locked`. To build only the CLI, run `cargo build --release --locked --no-default-features --bin metasafe`.
 
-## Границы проверки
+## Verification and limits
 
-Поддерживаются JPEG. Проверка охватывает EXIF, GPS в EXIF, XMP, IPTC, комментарии JPEG и ICC. Отчёт показывает неизвестные сегменты и данные после конца JPEG. Допускается служебный заголовок JFIF без миниатюры. `verify` также проверяет, декодируется ли JPEG.
+MetaSafe supports JPEG. It checks EXIF, GPS in EXIF, XMP, IPTC, JPEG comments, and ICC profiles. The report flags unrecognized segments and data after the JPEG end marker. A standard JFIF header without a thumbnail is allowed. The `verify` command also checks whether the JPEG decodes.
 
-Очистка перекодирует JPEG с качеством 90 и удаляет исходный профиль ICC. Размер, качество и цветопередача могут измениться. Лица, адреса и другие детали в пикселях сохраняются. Отчёт не подтверждает анонимность.
+Cleaning re-encodes the JPEG at quality 90 and removes the original ICC profile. File size, image quality, and color rendering may change. Faces, addresses, and other visible details remain in the pixels. A passing report does not establish anonymity.
 
-Разбор EXIF ограничен 1 024 полями, 32 каталогами TIFF и оценкой памяти в 1 МиБ. При превышении предела программа отмечает EXIF и GPS как непроверенные и отклоняет очистку.
+EXIF parsing is limited to 1,024 fields, 32 TIFF directories, and an estimated 1 MiB allocation budget. If any limit is exceeded, MetaSafe marks EXIF and GPS as unverified and stops cleaning that file.
 
-Выбирайте папку вывода, которую могут изменять только доверенные пользователи. Это касается и родительских папок. MetaSafe сравнивает опубликованный файл с проверенной копией и сообщает о расхождении. Процесс с правом записи может подменить файл во время проверки или после неё.
+Choose an output folder and parent directories that only trusted users can modify. MetaSafe compares the saved file with the verified copy and reports a mismatch. A process with write access can replace the file during or after this check.
 
-Предел входного и выходного файла составляет 64 МиБ. Для декодирования действуют пределы 16 384 пикселя на сторону и 40 мегапикселей. Лимит выделений декодера применяется по возможности и не ограничивает всю память процесса. При аварийном завершении временный файл может остаться в папке назначения.
+Input and output files are limited to 64 MiB. Decoding is limited to 16,384 pixels per side and 40 megapixels. The decoder allocation limit is best-effort and does not cap total process memory. A crash can leave a temporary file in the output folder.
