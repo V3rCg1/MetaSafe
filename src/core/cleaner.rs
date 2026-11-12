@@ -11,44 +11,87 @@ use image::{
 use tempfile::NamedTempFile;
 
 use super::{
-    Error, MAX_FILE_BYTES, batch::valid_output_name, formats, metadata::Report, open_regular_file,
-    read_file,
+    Error, MAX_FILE_BYTES, batch::valid_output_name, formats, lossless, metadata::Report,
+    open_regular_file, read_file,
 };
 
 const JPEG_QUALITY: u8 = 90;
 const PREVIEW_SIDE: u32 = 1_280;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CleanMode {
+    Reencode,
+    KeepEncoding,
+}
+
 pub fn clean(source: &Path, destination: &Path) -> Result<Report, Error> {
+    clean_with_mode(source, destination, CleanMode::Reencode)
+}
+
+pub fn clean_with_mode(
+    source: &Path,
+    destination: &Path,
+    mode: CleanMode,
+) -> Result<Report, Error> {
+    clean_with_options(source, destination, mode, false)
+}
+
+pub fn clean_with_options(
+    source: &Path,
+    destination: &Path,
+    mode: CleanMode,
+    strip_h264_sei: bool,
+) -> Result<Report, Error> {
     if !destination.file_name().is_some_and(valid_output_name) {
         return Err(Error::InvalidDestinationName(destination.to_owned()));
     }
+
+    if super::video::is_video(source) {
+        return super::video::clean_with_options(source, destination, strip_h264_sei);
+    }
+
     let bytes = read_file(source)?;
+    let input_format = image::guess_format(&bytes).ok();
+    let extension = destination
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase);
+    let format = match extension.as_deref() {
+        Some("jpg" | "jpeg") => ImageFormat::Jpeg,
+        Some("png") => ImageFormat::Png,
+        Some("webp") if mode == CleanMode::KeepEncoding => ImageFormat::WebP,
+        None if input_format == Some(ImageFormat::Jpeg) => ImageFormat::Jpeg,
+        _ if mode == CleanMode::KeepEncoding => return Err(Error::UnsupportedLosslessFormat),
+        _ => return Err(Error::UnsupportedOutputFormat),
+    };
+    if mode == CleanMode::KeepEncoding && input_format != Some(format) {
+        return Err(Error::UnsupportedLosslessFormat);
+    }
+
     let (report, image) = formats::read_image(&bytes, source, true)?;
     if report.orientation_unverified() {
         return Err(Error::UnverifiedOrientation);
     }
     let mut image = image.expect("pixels requested");
-    // Apply the same orientation reported by the EXIF scanner to the decoded pixels.
-    image.apply_orientation(orientation(&report));
-    drop(bytes);
-    let format = match destination
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("jpg" | "jpeg") => ImageFormat::Jpeg,
-        Some("png") => ImageFormat::Png,
-        None if report.format == "JPEG" => ImageFormat::Jpeg,
-        _ => return Err(Error::UnsupportedOutputFormat),
+    let copy = if mode == CleanMode::KeepEncoding {
+        if report.single_frame_export {
+            return Err(Error::UnsupportedLosslessFormat);
+        }
+        if orientation(&report) != Orientation::NoTransforms {
+            return Err(Error::LosslessTransformRequired);
+        }
+        Some(lossless::strip(&bytes, format)?)
+    } else {
+        image.apply_orientation(orientation(&report));
+        if format == ImageFormat::Jpeg
+            && image.color().has_alpha()
+            && image.to_rgba8().pixels().any(|pixel| pixel.0[3] != 255)
+        {
+            return Err(Error::TransparentJpeg);
+        }
+        None
     };
-
-    if format == ImageFormat::Jpeg
-        && image.color().has_alpha()
-        && image.to_rgba8().pixels().any(|pixel| pixel.0[3] != 255)
-    {
-        return Err(Error::TransparentJpeg);
-    }
+    drop(bytes);
 
     let parent = destination
         .parent()
@@ -65,10 +108,15 @@ pub fn clean(source: &Path, destination: &Path) -> Result<Report, Error> {
     let mut temporary = NamedTempFile::new_in(parent).map_err(write_error)?;
     {
         let mut writer = BufWriter::new(temporary.as_file_mut());
-        encode(image, format, &mut writer).map_err(|error| match error {
-            image::ImageError::IoError(source) => write_error(source),
-            error => Error::Image(error),
-        })?;
+        if let Some(copy) = copy {
+            drop(image);
+            writer.write_all(&copy).map_err(write_error)?;
+        } else {
+            encode(image, format, &mut writer).map_err(|error| match error {
+                image::ImageError::IoError(source) => write_error(source),
+                error => Error::Image(error),
+            })?;
+        }
         writer.flush().map_err(write_error)?;
     }
     let file = temporary.as_file_mut();
@@ -145,6 +193,31 @@ fn orientation(report: &Report) -> Orientation {
 }
 
 pub fn suggested_output_extension(source: &Path) -> &'static str {
+    suggested_output_extension_for_mode(source, CleanMode::Reencode)
+}
+
+pub fn suggested_output_extension_for_mode(source: &Path, mode: CleanMode) -> &'static str {
+    if let Some(extension) = source.extension().and_then(|ext| ext.to_str())
+        && let Some(format) = super::video::EXTENSIONS
+            .iter()
+            .find(|format| extension.eq_ignore_ascii_case(format))
+    {
+        return format;
+    }
+
+    if mode == CleanMode::KeepEncoding {
+        let mut signature = [0; 16];
+        if let Ok((mut file, _)) = open_regular_file(source)
+            && let Ok(length) = file.read(&mut signature)
+        {
+            match image::guess_format(&signature[..length]) {
+                Ok(ImageFormat::Jpeg) => return "jpg",
+                Ok(ImageFormat::WebP) => return "webp",
+                _ => {}
+            }
+        }
+        return "png";
+    }
     match source.extension().and_then(|extension| extension.to_str()) {
         Some(extension)
             if ["jpg", "jpeg", "jpe", "jfif"]

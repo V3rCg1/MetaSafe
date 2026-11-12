@@ -2265,9 +2265,10 @@ dependencies = [
 
 [[package]]
 name = "metasafe"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "clap",
+ "crc32fast",
  "flate2",
  "image",
  "kamadak-exif",
@@ -2280,9 +2281,11 @@ dependencies = [
 
 [[package]]
 name = "metasafe-desktop"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
+ "getrandom 0.4.3",
+ "httparse",
  "image",
  "metasafe",
  "rfd",

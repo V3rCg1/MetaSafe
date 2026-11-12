@@ -2,7 +2,9 @@ mod batch;
 mod cleaner;
 mod external;
 mod formats;
+mod lossless;
 pub mod metadata;
+pub mod video;
 
 use std::{
     fs::{File, Metadata, OpenOptions},
@@ -10,8 +12,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub use batch::{BatchItem, BatchReport, batch_clean};
-pub use cleaner::{clean, preview, suggested_output_extension};
+pub use batch::{
+    BatchItem, BatchReport, batch_clean, batch_clean_with_mode, batch_clean_with_options,
+};
+pub use cleaner::{
+    CleanMode, clean, clean_with_mode, clean_with_options, preview, suggested_output_extension,
+    suggested_output_extension_for_mode,
+};
 pub use formats::EXTENSIONS;
 use metadata::Report;
 
@@ -37,10 +44,20 @@ pub enum Error {
     UnsupportedFormat,
     #[error("install {0} to process this image format")]
     MissingTool(&'static str),
+    #[error("video processing failed: {0}")]
+    Video(String),
     #[error("image tool failed: {0}")]
     ExternalTool(String),
     #[error("use .png, .jpg or .jpeg for the cleaned copy")]
     UnsupportedOutputFormat,
+    #[error(
+        "cleaning without re-encoding requires a static JPEG, PNG or WebP and a matching output format"
+    )]
+    UnsupportedLosslessFormat,
+    #[error(
+        "cleaning without re-encoding cannot remove this image's orientation or color-transform marker"
+    )]
+    LosslessTransformRequired,
     #[error("JPEG cannot preserve transparency; save a PNG copy")]
     TransparentJpeg,
     #[error("image dimensions {0} × {1} exceed the pixel limit")]
@@ -74,10 +91,16 @@ pub enum Error {
 }
 
 pub fn inspect(path: &Path) -> Result<Report, Error> {
+    if video::is_video(path) {
+        return video::inspect(path);
+    }
     Ok(formats::read_image(&read_file(path)?, path, false)?.0)
 }
 
 pub fn verify(path: &Path) -> Result<Report, Error> {
+    if video::is_video(path) {
+        return video::verify(path);
+    }
     let bytes = read_file(path)?;
     Ok(formats::read_image(&bytes, path, true)?.0)
 }
@@ -101,7 +124,7 @@ fn read_file(path: &Path) -> Result<Vec<u8>, Error> {
     Ok(bytes)
 }
 
-fn open_regular_file(path: &Path) -> Result<(File, Metadata), Error> {
+pub fn open_regular_file(path: &Path) -> Result<(File, Metadata), Error> {
     let read_error = |source| Error::Read {
         path: path.to_path_buf(),
         source,

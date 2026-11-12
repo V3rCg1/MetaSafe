@@ -396,6 +396,13 @@ pub enum ScanError {
 }
 
 pub fn scan(input: &[u8]) -> Result<Report, ScanError> {
+    scan_jpeg_segments(input, |_, _, _| {})
+}
+
+pub(super) fn scan_jpeg_segments(
+    input: &[u8],
+    mut visit: impl FnMut(Option<u8>, &[u8], &[u8]),
+) -> Result<Report, ScanError> {
     let mut remaining = input.strip_prefix(b"\xff\xd8").ok_or(ScanError::NotJpeg)?;
     let mut report = Report::new();
     let mut saw_frame = false;
@@ -407,11 +414,19 @@ pub fn scan(input: &[u8]) -> Result<Report, ScanError> {
     // with FF and may have FF fill bytes. SOS switches to entropy mode.
     for _ in 0..MAX_MARKERS {
         if in_scan {
+            let entropy = remaining;
             remaining = skip_entropy(remaining)?;
+            visit(None, &entropy[..entropy.len() - remaining.len()], &[]);
         }
+        let segment = remaining;
         let marker = take_marker(&mut remaining)?;
         match marker {
             0xd9 if saw_frame && saw_scan => {
+                visit(
+                    Some(marker),
+                    &segment[..segment.len() - remaining.len()],
+                    &[],
+                );
                 if !remaining.is_empty() {
                     report.record(MetadataKind::TrailingData, Status::Present);
                     report.add_detail(
@@ -422,7 +437,14 @@ pub fn scan(input: &[u8]) -> Result<Report, ScanError> {
                 }
                 return Ok(report);
             }
-            0xd0..=0xd7 if in_scan => continue,
+            0xd0..=0xd7 if in_scan => {
+                visit(
+                    Some(marker),
+                    &segment[..segment.len() - remaining.len()],
+                    &[],
+                );
+                continue;
+            }
             0x01 => {
                 report.record(MetadataKind::Unknown, Status::Present);
                 continue;
@@ -432,6 +454,11 @@ pub fn scan(input: &[u8]) -> Result<Report, ScanError> {
         }
 
         let payload = take_segment(&mut remaining)?;
+        visit(
+            Some(marker),
+            &segment[..segment.len() - remaining.len()],
+            payload,
+        );
         in_scan = marker == 0xda || (in_scan && marker == 0xdc);
         match marker {
             0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf => {
@@ -555,7 +582,7 @@ fn skip_entropy(mut remaining: &[u8]) -> Result<&[u8], ScanError> {
     }
 }
 
-fn is_plain_jfif(payload: &[u8]) -> bool {
+pub(super) fn is_plain_jfif(payload: &[u8]) -> bool {
     // Only allow the fixed, thumbnail-free JFIF header emitted by encoders.
     payload.len() == 14
         && payload.starts_with(b"JFIF\0\x01")

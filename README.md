@@ -1,31 +1,29 @@
-# MetaSafe v0.5.0
+# MetaSafe v0.6.0
 
 [Русский](README.ru.md) · **English**
 
-MetaSafe is an open-source desktop app and CLI for inspecting photo metadata and saving verified copies. Processing stays on your device, and the originals are preserved. The source is available under the [MIT License](LICENSE).
+MetaSafe is an open-source desktop app and CLI for inspecting photo and video metadata and saving verified copies. Processing stays on your device, and the originals are preserved. The source is available under the [MIT License](LICENSE).
 
-## Quick start
+## Download
 
-To run v0.5.0, [build the Tauri app from source](#run-the-tauri-interface). The instructions below cover the published v0.3.0 archives. [Download v0.3.0](https://github.com/V3rCg1/MetaSafe/releases/tag/v0.3.0)
+[Download MetaSafe v0.6.0](https://github.com/V3rCg1/MetaSafe/releases/latest). The graphical app is now available for Linux as a Debian package. On Debian ARM64, run `sudo apt install ./MetaSafe_0.6.0_arm64.deb` in the download folder. The release assets identify each supported architecture.
 
-### macOS on Apple Silicon
+### Desktop compatibility
 
-Open Terminal, go to the `package` folder inside the extracted archive, and launch the desktop app:
+| System | Verified in the graphical app |
+| --- | --- |
+| Debian 12 ARM64 | JPEG metadata and single save, mixed JPEG and WebM batch, MP4, MKV and WebM playback |
+| macOS Apple Silicon | JPEG metadata and single save, mixed JPEG and MP4 batch, MP4 playback. The native file picker blocked the tested MKV and WebM files |
+| Windows 11 ARM64 and Windows Server 2025 x64 | JPEG metadata and single save, mixed JPEG and MP4 batch, MP4, MKV and WebM playback |
 
-```sh
-./metasafe-gui
-```
+Windows checks used test builds and native dialogs. Windows 10 and the Windows installer were outside that test. Video playback depends on system codecs. Install FFmpeg and FFprobe to inspect and clean videos if they are not installed with the package.
 
-For the command-line interface, run `./metasafe` from the same folder. The binaries lack a publisher signature, so macOS may display a developer warning.
-
-### Windows x64
-
-Double-click `metasafe-gui.exe` in the extracted folder. For the command-line interface, open PowerShell in the same folder and run `.\metasafe.exe`. The binaries lack a publisher signature, so Windows may display a publisher warning.
+This release also addresses three findings from the Codex Security review. PNG verification detects surplus data inside IDAT, GIF verification checks animation extension structure, and the Linux player verifies requests before assigning streaming workers.
 
 ## Desktop app
 
-1. Click **Open JPEG** and select one or more `.jpg` or `.jpeg` files. You can also drag files into the window.
-2. Select a photo to see its preview and metadata. EXIF fields can contain precise coordinates.
+1. In the Tauri app, click **Open files** and select photos or videos. You can also drag files into the window.
+2. Select a file to see its preview and metadata. Expand any row marked **Found** to see the values. EXIF fields can contain precise coordinates.
 3. Click **Create cleaned copy…** for one file and choose a name. For multiple files, click **Create cleaned copies…** and choose a destination folder.
 4. When processing finishes, expand the report for any file.
 
@@ -70,9 +68,42 @@ On macOS, Homebrew can install these tools with `brew install imagemagick exifto
 
 Open files in the Tauri interface and expand a metadata row marked **Found** to see its fields. Unverified checks are labeled separately. Batch cleanup defaults to JPEG for JPEG inputs and PNG for other inputs. PNG copies retain transparency. Animated and multi-image inputs export one rendered image, without layers or animation.
 
+## Clean without re-encoding
+
+In Tauri, turn on **Keep encoding** before saving a single file or batch. The CLI offers the same mode.
+
+```sh
+metasafe clean photo.webp --output photo_clean.webp --no-reencode
+metasafe batch photo.jpg diagram.png image.webp --output-dir cleaned --no-reencode
+```
+
+This mode removes container metadata from static JPEG, PNG, and WebP while copying the compressed image data. The output uses the same format. PNG and WebP transparency stays intact. Files that require rotation or a color transform and animated files return a per-file error. Batch cleanup continues with other files. Removing color profiles may affect rendering in color-managed viewers.
+
+## Video
+
+The Tauri app and CLI accept MP4, MOV, MKV, and WebM. Install `ffmpeg` and `ffprobe` and make them available on `PATH`. Open videos in Tauri to inspect their metadata, play compatible tracks, and save one or more cleaned copies. Playback depends on the codecs available to the system webview.
+
+```sh
+metasafe inspect clip.mkv
+metasafe clean clip.mkv --output clip_clean.mkv
+mkdir -p cleaned
+metasafe batch clip.mkv recording.webm --output-dir cleaned
+metasafe verify cleaned/recording_clean.webm
+```
+
+Default cleanup copies encoded video, audio, and subtitle tracks to the same container format. It removes supported container tags and chapters. Subtitle text and HDR signaling can carry information and are retained. Review subtitle content before sharing. Matroska files with attachments such as subtitle fonts are rejected to avoid silently changing how subtitles display.
+
+`--strip-h264-sei` opts into removing H.264 SEI messages from encoded packets without re-encoding. Use it only for compatible SDR H.264 input. The tool rejects detectable HDR or embedded caption signaling when filtering. H.264 SEI can carry other information too, and the filter removes all SEI messages it encounters. The video size limit is under 2 GiB and each file can contain up to 32 tracks. Large files need temporary disk space for the input snapshot and cleaned copy. The metadata report does not certify removal of private data inside encoded streams or subtitle text. Other codecs, Dolby Vision, HDR10+ and custom stream payloads do not have a general in-stream cleaner.
+
+## Linux
+
+To install a local Debian build, run `sudo apt install ./MetaSafe_0.6.0_arm64.deb` from the folder containing the ARM64 package. APT installs FFmpeg and the desktop integration dependencies. Its recommended GStreamer packages broaden playback support. On Linux, the built-in player streams the selected file through a private address on the same device (`127.0.0.1`).
+
+The CI workflow builds the CLI and the Tauri Debian package on Ubuntu 24.04. To build locally, install the Linux dependencies listed by [Tauri](https://v2.tauri.app/start/prerequisites/#linux), then run the Tauri steps below. For a Debian package, run `npm run tauri build -- --bundles deb` in `desktop/`. For the CLI alone, run `cargo build --release --locked --no-default-features` from the project root.
+
 ## Run the Tauri interface
 
-Install Node.js, Rust, and the [Tauri system prerequisites](https://v2.tauri.app/start/prerequisites/). From the project root, run:
+Install Node.js, Rust 1.90 or later, and the [Tauri system prerequisites](https://v2.tauri.app/start/prerequisites/). From the project root, run:
 
 ```sh
 cd desktop
@@ -102,4 +133,4 @@ EXIF parsing is limited to 1,024 fields, 32 TIFF directories, and an estimated 1
 
 Choose an output folder and parent directories that only trusted users can modify. MetaSafe compares the saved file with the verified copy and reports a mismatch. A process with write access can replace the file during or after this check.
 
-Input and output files are limited to 64 MiB. Decoding is limited to 16,384 pixels per side and 40 megapixels. The decoder allocation limit is best-effort and does not cap total process memory. A crash can leave a temporary file in the output folder.
+Photo input and output files are limited to 64 MiB. Decoding is limited to 16,384 pixels per side and 40 megapixels. The decoder allocation limit is best-effort and does not cap total process memory. A crash can leave a temporary file in the output folder.

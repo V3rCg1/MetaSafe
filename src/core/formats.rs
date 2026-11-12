@@ -3,6 +3,7 @@ use std::{
     path::Path,
 };
 
+use flate2::{Decompress, FlushDecompress, Status as InflateStatus};
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
 
 use super::{
@@ -230,6 +231,10 @@ fn trailing(report: &mut Report, bytes: &[u8]) {
 
 pub(super) fn scan_png(mut bytes: &[u8]) -> Result<Report, ScanError> {
     let mut report = Report::new();
+    let mut image_data = Decompress::new(true);
+    let mut stream_finished = false;
+    let mut surplus = 0;
+    let mut scratch = [0; 8192];
     report.format = "PNG".into();
     bytes = bytes
         .strip_prefix(b"\x89PNG\r\n\x1a\n")
@@ -242,12 +247,32 @@ pub(super) fn scan_png(mut bytes: &[u8]) -> Result<Report, ScanError> {
         let data = bytes.get(8..end - 4).ok_or(ScanError::InvalidContainer)?;
         bytes = bytes.get(end..).ok_or(ScanError::InvalidContainer)?;
         match kind {
-            b"IHDR" | b"PLTE" | b"IDAT" | b"tRNS" => {}
+            b"IHDR" | b"PLTE" | b"tRNS" => {}
+            b"IDAT" => {
+                if stream_finished {
+                    surplus += data.len();
+                } else if let Some(remaining) = png_stream_end(&mut image_data, data, &mut scratch)?
+                {
+                    stream_finished = true;
+                    surplus += remaining;
+                }
+            }
             b"acTL" => {
                 report.single_frame_export = true;
                 add_unknown(&mut report, kind, data.len());
             }
             b"IEND" if data.is_empty() => {
+                if !stream_finished {
+                    return Err(ScanError::InvalidContainer);
+                }
+                if surplus != 0 {
+                    report.record(Kind::TrailingData, Status::Present);
+                    report.add_detail(
+                        Kind::TrailingData,
+                        "PNG IDAT after zlib stream",
+                        &surplus.to_string(),
+                    );
+                }
                 trailing(&mut report, bytes);
                 return Ok(report);
             }
@@ -298,6 +323,38 @@ pub(super) fn scan_png(mut bytes: &[u8]) -> Result<Report, ScanError> {
         }
     }
     Err(ScanError::InvalidContainer)
+}
+
+// Eight bytes per pixel plus filter bytes for all Adam7 passes.
+const MAX_PNG_STREAM_BYTES: u64 = MAX_PIXELS * 8 + MAX_SIDE as u64 * 4;
+
+fn png_stream_end(
+    stream: &mut Decompress,
+    mut data: &[u8],
+    scratch: &mut [u8],
+) -> Result<Option<usize>, ScanError> {
+    loop {
+        let (input_before, output_before) = (stream.total_in(), stream.total_out());
+        let status = stream
+            .decompress(data, scratch, FlushDecompress::None)
+            .map_err(|_| ScanError::InvalidContainer)?;
+        let consumed = (stream.total_in() - input_before) as usize;
+        let produced = stream.total_out() - output_before;
+        data = &data[consumed..];
+        if stream.total_out() > MAX_PNG_STREAM_BYTES {
+            return Err(ScanError::InvalidContainer);
+        }
+        if status == InflateStatus::StreamEnd {
+            return Ok(Some(data.len()));
+        }
+        if consumed == 0 && produced == 0 {
+            return if data.is_empty() {
+                Ok(None)
+            } else {
+                Err(ScanError::InvalidContainer)
+            };
+        }
+    }
 }
 
 fn scan_webp(bytes: &[u8]) -> Result<Report, ScanError> {
@@ -390,12 +447,11 @@ fn scan_gif(mut bytes: &[u8]) -> Result<Report, ScanError> {
                 bytes = gif_blocks(rest, Some(&mut content))?;
                 match label {
                     0xfe => report.add_text(Kind::Comment, "GIF comment", &content),
-                    0xf9 => {}
+                    0xf9 if matches!(&rest[..rest.len() - bytes.len()], [4, _, _, _, _, 0]) => {}
                     0xff if content.starts_with(b"XMP DataXMP") => {
                         report.add_text(Kind::Xmp, "XMP", &content[11..]);
                     }
-                    0xff if content.starts_with(b"NETSCAPE2.0")
-                        || content.starts_with(b"ANIMEXTS1.0") => {}
+                    0xff if is_gif_loop_extension(&rest[..rest.len() - bytes.len()]) => {}
                     _ => add_unknown(&mut report, &[label], content.len()),
                 }
             }
@@ -403,6 +459,14 @@ fn scan_gif(mut bytes: &[u8]) -> Result<Report, ScanError> {
         }
     }
     Err(ScanError::InvalidContainer)
+}
+
+fn is_gif_loop_extension(blocks: &[u8]) -> bool {
+    matches!(
+        blocks,
+        [11, identifier @ .., 3, 1, _, _, 0]
+            if matches!(identifier, b"NETSCAPE2.0" | b"ANIMEXTS1.0")
+    )
 }
 
 fn gif_palette_bytes(flags: u8) -> usize {
@@ -428,5 +492,57 @@ fn gif_blocks<'a>(
             prefix.extend_from_slice(&data[..length.min(513_usize.saturating_sub(prefix.len()))]);
         }
         bytes = &rest[length..];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn png_stream_boundary_survives_split_input_and_full_scratch() {
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&[42; 32_768]).unwrap();
+        let data = encoder.finish().unwrap();
+        let mut decoder = Decompress::new(true);
+        let mut scratch = [0; 128];
+        let mut result = None;
+        for byte in &data {
+            assert!(result.is_none());
+            result =
+                png_stream_end(&mut decoder, std::slice::from_ref(byte), &mut scratch).unwrap();
+        }
+        assert_eq!(result, Some(0));
+        assert_eq!(decoder.total_out(), 32_768);
+        let mut decoder = Decompress::new(true);
+        assert_eq!(
+            png_stream_end(&mut decoder, &data[..data.len() - 1], &mut scratch).unwrap(),
+            None
+        );
+        assert_eq!(
+            png_stream_end(&mut decoder, &data[data.len() - 1..], &mut scratch).unwrap(),
+            Some(0)
+        );
+        let mut framed = data;
+        framed.extend_from_slice(&[0; 2]);
+        assert_eq!(
+            png_stream_end(&mut Decompress::new(true), &framed, &mut scratch).unwrap(),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn gif_loop_extension_requires_exact_block_framing() {
+        for identifier in [b"NETSCAPE2.0", b"ANIMEXTS1.0"] {
+            let blocks = [&[11], identifier.as_slice(), &[3, 1, 2, 0, 0]].concat();
+            assert!(is_gif_loop_extension(&blocks));
+            assert!(!is_gif_loop_extension(&blocks[..blocks.len() - 1]));
+            assert!(!is_gif_loop_extension(&[blocks.as_slice(), &[0]].concat()));
+            let mut wrong_size = blocks;
+            wrong_size[0] = 10;
+            assert!(!is_gif_loop_extension(&wrong_size));
+        }
     }
 }

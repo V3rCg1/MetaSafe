@@ -161,3 +161,78 @@ fn animated_gif_reports_comment_and_exports_first_frame() {
         [10, 20, 30, 255]
     );
 }
+
+#[test]
+fn no_reencode_batch_preserves_compressed_jpeg_png_and_webp() {
+    let directory = tempfile::tempdir().unwrap();
+    let jpeg = directory.path().join("photo.jpg");
+    let png = directory.path().join("photo.png");
+    let webp = directory.path().join("photo.webp");
+    let gif = directory.path().join("photo.gif");
+
+    let jpeg_clean = encoded(ImageFormat::Jpeg);
+    let mut jpeg_input = jpeg_clean.clone();
+    jpeg_input.splice(2..2, [0xff, 0xfe, 0, 6, b't', b'e', b's', b't']);
+    jpeg_input.extend_from_slice(b"private trailer");
+    fs::write(&jpeg, &jpeg_input).unwrap();
+
+    let png_clean = encoded(ImageFormat::Png);
+    let mut png_input = png_clean.clone();
+    png_input.splice(33..33, png_chunk(b"tEXt", b"Author\0Private author"));
+    fs::write(&png, &png_input).unwrap();
+
+    fn webp_with_xmp(image: &[u8], metadata: bool) -> Vec<u8> {
+        let mut file = b"RIFF\0\0\0\0WEBPVP8X\x0a\0\0\0".to_vec();
+        file.extend_from_slice(&[
+            if metadata { 0x14 } else { 0x10 },
+            0,
+            0,
+            0,
+            11,
+            0,
+            0,
+            7,
+            0,
+            0,
+        ]);
+        file.extend_from_slice(&image[12..]);
+        if metadata {
+            file.extend_from_slice(b"XMP \x04\0\0\0test");
+        }
+        let riff_size = (file.len() as u32 - 8).to_le_bytes();
+        file[4..8].copy_from_slice(&riff_size);
+        file
+    }
+
+    let transparent =
+        DynamicImage::ImageRgba8(RgbaImage::from_pixel(12, 8, Rgba([23, 87, 153, 120])));
+    let mut webp_encoded = Cursor::new(Vec::new());
+    transparent
+        .write_to(&mut webp_encoded, ImageFormat::WebP)
+        .unwrap();
+    let webp_encoded = webp_encoded.into_inner();
+    let webp_input = webp_with_xmp(&webp_encoded, true);
+    let webp_clean = webp_with_xmp(&webp_encoded, false);
+    fs::write(&webp, &webp_input).unwrap();
+    fs::write(&gif, encoded(ImageFormat::Gif)).unwrap();
+
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_metasafe"))
+        .args(["batch", "--no-reencode"])
+        .args([&jpeg, &gif, &png, &webp])
+        .arg("--output-dir")
+        .arg(directory.path())
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&result.stdout).contains("Created 3/4 copies"));
+    for (extension, original, before, expected) in [
+        ("jpg", jpeg, jpeg_input, jpeg_clean),
+        ("png", png, png_input, png_clean),
+        ("webp", webp, webp_input, webp_clean),
+    ] {
+        let output = directory.path().join(format!("photo_clean.{extension}"));
+        assert_eq!(fs::read(&original).unwrap(), before);
+        assert_eq!(fs::read(&output).unwrap(), expected);
+        assert!(core::verify(&output).unwrap().passed());
+    }
+}

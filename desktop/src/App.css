@@ -121,7 +121,8 @@ h1 { margin-bottom: 18px; font-size: clamp(26px, 4vw, 38px); letter-spacing: -0.
   background-image: radial-gradient(#212121 0.7px, transparent 0.7px);
   background-size: 16px 16px;
 }
-.stage img { display: block; width: 100%; height: clamp(285px, 52vh, 450px); object-fit: contain; }
+.stage img, .stage video { display: block; width: 100%; height: clamp(285px, 52vh, 450px); object-fit: contain; }
+.stage video { background: #000; }
 .stage-message {
   display: grid;
   justify-items: center;
@@ -176,6 +177,12 @@ details[open] > summary > svg:last-child { transform: rotate(180deg); }
 }
 .action-bar { margin-top: 14px; color: var(--muted); font-size: 12px; }
 .clean-action { flex-wrap: wrap; justify-content: end; }
+.encoding-option { display: inline-flex; align-items: center; gap: 6px; }
+.encoding-option input { margin: 0; accent-color: #ededed; }
+.encoding-option input:focus-visible { outline: 2px solid #8ab4ff; outline-offset: 2px; }
+.video-option { display: grid; gap: 3px; }
+.video-option small { color: var(--muted); max-width: 27ch; }
+
 .outcomes { margin-top: 16px; }
 .outcome .checks { margin: 0 12px 12px; border: 1px solid var(--border); border-radius: 6px; }
 .error-banner {

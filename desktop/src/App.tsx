@@ -1,8 +1,8 @@
-import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
+import { Channel, convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   AlertCircle, Check, ChevronDown, FileImage, FolderOpen, Image, LockKeyhole,
-  Plus, ShieldCheck, Sparkles, Upload,
+  Plus, ShieldCheck, Sparkles, Upload, Video,
 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { useEffect, useState } from "react";
@@ -19,8 +19,8 @@ type Report = {
   truncated: boolean;
   orientation_unverified: boolean;
 };
-type Selection = { revision: number; names: string[] };
-type Preview = { image: string; report: Report };
+type Selection = { revision: number; names: string[]; videos: boolean[] };
+type Preview = { image: string | null; video: string | null; video_port: number | null; report: Report };
 type Outcome = { source: string; destination: string; report: Report | null; error: string | null };
 type LoadedPreview = { revision: number; index: number } & (
   { data: Preview; error?: never } | { data?: never; error: string }
@@ -28,28 +28,40 @@ type LoadedPreview = { revision: number; index: number } & (
 
 const messages = {
   en: {
-    workspace: "Photo workspace", open: "Open photos", files: "Files", noFiles: "No files selected",
-    preview: "Preview", emptyTitle: "Start with a photo", emptyText: "Drop photos here or choose them from your device.",
-    metadata: "Metadata", emptyMeta: "Open a photo to see which metadata it contains.",
+    workspace: "Photos and videos", open: "Open files", files: "Files", noFiles: "No files selected",
+    preview: "Preview", emptyTitle: "Open a photo or video", emptyText: "Drop files here or choose them from your device.",
+    metadata: "Metadata", emptyMeta: "Open a file to see which metadata it contains.",
     noDetails: "Individual fields are unavailable.", clear: "Not found", present: "Found", unknown: "Unverified",
+    keepEncoding: "Keep encoding",
+    keepEncodingHint: "Static JPEG, PNG and WebP in the original format",
+    videoScope: "Verification covers container and track metadata. Subtitles, picture and sound can contain personal information.",
+    stripSei: "Remove H.264 SEI messages",
+    stripSeiHint: "Blocked if embedded captions or HDR are detected. Other playback information may change.",
+    videoUnsupported: "This video cannot play in the system player. You can still clean it.",
     clean: "Create cleaned copy", batch: "Create cleaned copies", working: "Processing",
     singleFrame: "The copy contains one rendered image.",
     local: "On-device processing", original: "Originals are preserved",
     results: "Verification results", saved: "Verified", failed: "Failed", folder: "Open output folder",
-    noPreview: "Preview unavailable", loading: "Reading photo…", browser: "Open MetaSafe in Tauri to select photos.",
+    noPreview: "Preview unavailable", loading: "Reading file…", browser: "Open MetaSafe in Tauri to select files.",
     orientation: "EXIF orientation could not be verified.", truncated: "Some EXIF fields were omitted or shortened.",
     checks: { exif: "EXIF", gps: "Location", xmp: "XMP", iptc: "IPTC", comment: "Comments", icc: "ICC profile", unknown: "Other segments", trailing: "Trailing data" },
   },
   ru: {
-    workspace: "Обработка фотографий", open: "Открыть фото", files: "Файлы", noFiles: "Файлы не выбраны",
-    preview: "Превью", emptyTitle: "Откройте фотографию", emptyText: "Перетащите фотографии сюда или выберите файлы на устройстве.",
-    metadata: "Метаданные", emptyMeta: "Откройте фото, чтобы увидеть его метаданные.",
+    workspace: "Фото и видео", open: "Открыть файлы", files: "Файлы", noFiles: "Файлы не выбраны",
+    preview: "Превью", emptyTitle: "Откройте фото или видео", emptyText: "Перетащите файлы сюда или выберите их на устройстве.",
+    metadata: "Метаданные", emptyMeta: "Откройте файл, чтобы увидеть его метаданные.",
     noDetails: "Отдельные поля недоступны.", clear: "Не найдено", present: "Найдено", unknown: "Не проверено",
+    keepEncoding: "Без перекодирования",
+    keepEncodingHint: "Статические JPEG, PNG и WebP в исходном формате",
+    videoScope: "Проверяются метаданные контейнера и дорожек. Субтитры, изображение и звук могут содержать личные данные.",
+    stripSei: "Удалить сообщения H.264 SEI",
+    stripSeiHint: "При обнаружении встроенных субтитров или HDR операция блокируется. Другие данные воспроизведения могут измениться.",
+    videoUnsupported: "Системный плеер не воспроизводит это видео. Его всё равно можно очистить.",
     clean: "Создать очищенную копию", batch: "Создать очищенные копии", working: "Обработка",
     singleFrame: "Копия содержит одно изображение.",
     local: "Обработка на устройстве", original: "Оригиналы сохраняются",
     results: "Результаты проверки", saved: "Проверено", failed: "Ошибка", folder: "Открыть папку",
-    noPreview: "Превью недоступно", loading: "Чтение фото…", browser: "Запустите MetaSafe в Tauri, чтобы выбрать фото.",
+    noPreview: "Превью недоступно", loading: "Чтение файла…", browser: "Запустите MetaSafe в Tauri, чтобы выбрать файлы.",
     orientation: "Не удалось проверить ориентацию EXIF.", truncated: "Часть полей EXIF скрыта или сокращена.",
     checks: { exif: "EXIF", gps: "Местоположение", xmp: "XMP", iptc: "IPTC", comment: "Комментарии", icc: "Профиль ICC", unknown: "Другие сегменты", trailing: "Данные после изображения" },
   },
@@ -76,7 +88,7 @@ function Checks({ report, t }: { report: Report; t: Messages }) {
         const statusLabel = <span className={`status ${status}`}><i aria-hidden="true" />{t[status]}</span>;
         return (
           <li key={key}>
-            {status === "present" ? (
+            {status === "present" || details.length > 0 ? (
               <details className="metadata-disclosure">
                 <summary><span>{label}</span>{statusLabel}<ChevronDown size={13} aria-hidden="true" /></summary>
                 {details.length ? (
@@ -98,11 +110,31 @@ function Checks({ report, t }: { report: Report; t: Messages }) {
   );
 }
 
+function VideoPreview({ token, port, name, t }: { token: string | null; port: number | null; name: string; t: Messages }) {
+  const [unavailable, setUnavailable] = useState(false);
+  if (unavailable || !token) {
+    return (
+      <div className="stage-message" role="status">
+        <AlertCircle size={22} aria-hidden="true" />
+        <strong>{t.noPreview}</strong>
+        <p>{t.videoUnsupported}</p>
+      </div>
+    );
+  }
+  const src = port === null ? convertFileSrc(token, "metasafe-video") : `http://127.0.0.1:${port}/${token}`;
+  return (
+    <video src={src} controls preload="metadata"
+      aria-label={name} onError={() => setUnavailable(true)} />
+  );
+}
+
 export default function App() {
   const [language, setLanguage] = useState(preferredLanguage);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [index, setIndex] = useState(0);
   const [loaded, setLoaded] = useState<LoadedPreview | null>(null);
+  const [noReencode, setNoReencode] = useState(false);
+  const [stripH264Sei, setStripH264Sei] = useState(false);
   const [action, setAction] = useState<"open" | "clean" | null>(null);
   const [progress, setProgress] = useState(0);
   const [outcomes, setOutcomes] = useState<Outcome[]>([]);
@@ -113,7 +145,10 @@ export default function App() {
   const revision = selection?.revision;
   const current = loaded?.revision === revision && loaded?.index === index ? loaded : null;
   const activeName = selection?.names[index];
+  const activeVideo = selection?.videos[index] ?? false;
   const count = selection?.names.length ?? 0;
+  const hasVideos = selection?.videos.some(Boolean) ?? false;
+  const hasPhotos = selection?.videos.includes(false) ?? false;
   const saved = outcomes.filter((item) => item.report).length;
 
   function applySelection(next: Selection) {
@@ -121,6 +156,7 @@ export default function App() {
     setIndex(0);
     setLoaded(null);
     setOutcomes([]);
+    setStripH264Sei(false);
     setError("");
   }
 
@@ -179,7 +215,9 @@ export default function App() {
     const channel = new Channel<number>();
     channel.onmessage = setProgress;
     try {
-      const results = await invoke<Outcome[] | null>("clean_files", { revision, progress: channel });
+      const results = await invoke<Outcome[] | null>("clean_files", {
+        revision, progress: channel, noReencode, stripH264Sei: hasVideos && stripH264Sei,
+      });
       if (results) setOutcomes(results);
     } catch (reason) {
       setError(String(reason));
@@ -219,7 +257,7 @@ export default function App() {
                   <li key={position}>
                     <button className="file-item" aria-current={index === position ? "true" : undefined}
                       onClick={() => setIndex(position)} title={name}>
-                      <FileImage size={15} /><span>{name}</span>
+                      {selection.videos[position] ? <Video size={15} /> : <FileImage size={15} />}<span>{name}</span>
                     </button>
                   </li>
                 ))}
@@ -233,7 +271,10 @@ export default function App() {
               {activeName ? <span className="filename" title={activeName}>{activeName}</span> : null}
             </div>
             <div className="stage">
-              {current?.data ? (
+              {activeVideo && current?.data ? (
+                <VideoPreview key={`${revision}:${index}`} token={current.data.video} port={current.data.video_port}
+                  name={activeName ?? t.preview} t={t} />
+              ) : current?.data?.image ? (
                 <motion.img key={`${revision}:${index}`} src={current.data.image} alt={activeName}
                   initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} transition={transition} />
               ) : activeName ? (
@@ -262,6 +303,7 @@ export default function App() {
                 <Checks key={`${revision}:${index}`} report={current.data.report} t={t} />
                 {current.data.report.single_frame_export ? <p className="panel-note">{t.singleFrame}</p> : null}
                 {current.data.report.orientation_unverified ? <p className="panel-note warning">{t.orientation}</p> : null}
+                {activeVideo ? <p className="panel-note">{t.videoScope}</p> : null}
 
               </>
             ) : <p className="panel-note">{activeName && !current ? t.loading : t.emptyMeta}</p>}
@@ -271,6 +313,19 @@ export default function App() {
         <div className="action-bar">
           <span className="local"><LockKeyhole size={14} />{t.local}</span>
           <div className="clean-action">
+            {hasPhotos ? <label className="encoding-option" title={t.keepEncodingHint}>
+              <input type="checkbox" checked={noReencode} disabled={!count || action !== null}
+                onChange={(event) => setNoReencode(event.target.checked)} />
+              {t.keepEncoding}
+            </label> : null}
+            {hasVideos ? <div className="video-option">
+              <label className="encoding-option">
+                <input type="checkbox" checked={stripH264Sei} disabled={action !== null}
+                  onChange={(event) => setStripH264Sei(event.target.checked)} aria-describedby="strip-sei-hint" />
+                {t.stripSei}
+              </label>
+              <small id="strip-sei-hint">{t.stripSeiHint}</small>
+            </div> : null}
             {action === "clean" ? <span role="status">{t.working} {progress}/{count}</span> : <span>{t.original}</span>}
             <button className="button primary" disabled={!count || action !== null} onClick={cleanFiles}>
               <Sparkles size={15} />{count > 1 ? t.batch : t.clean}

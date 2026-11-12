@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use super::{Error, clean, metadata::Report, suggested_output_extension};
+use super::{
+    CleanMode, Error, clean_with_options, metadata::Report, suggested_output_extension_for_mode,
+};
 
 #[derive(Debug)]
 pub struct BatchItem {
@@ -21,6 +23,35 @@ pub struct BatchReport {
 pub fn batch_clean<I, P, F>(
     sources: I,
     output_dir: &Path,
+    progress: F,
+) -> Result<BatchReport, Error>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+    F: FnMut(&BatchItem),
+{
+    batch_clean_with_mode(sources, output_dir, CleanMode::Reencode, progress)
+}
+
+pub fn batch_clean_with_mode<I, P, F>(
+    sources: I,
+    output_dir: &Path,
+    mode: CleanMode,
+    progress: F,
+) -> Result<BatchReport, Error>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+    F: FnMut(&BatchItem),
+{
+    batch_clean_with_options(sources, output_dir, mode, false, progress)
+}
+
+pub fn batch_clean_with_options<I, P, F>(
+    sources: I,
+    output_dir: &Path,
+    mode: CleanMode,
+    strip_h264_sei: bool,
     mut progress: F,
 ) -> Result<BatchReport, Error>
 where
@@ -45,11 +76,11 @@ where
             Some(stem) if valid_output_name(stem) => {
                 let mut name = stem.to_owned();
                 name.push("_clean.");
-                name.push(suggested_output_extension(source));
+                name.push(suggested_output_extension_for_mode(source, mode));
                 let destination = output_dir.join(name);
                 BatchItem {
                     source: source.to_owned(),
-                    result: clean(source, &destination),
+                    result: clean_with_options(source, &destination, mode, strip_h264_sei),
                     destination,
                 }
             }

@@ -6,13 +6,16 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
-use metasafe::core::{self, metadata::Report};
+use metasafe::core::{
+    self, CleanMode,
+    metadata::{MetadataKind, Report},
+};
 
 #[derive(Parser)]
 #[command(
     name = "metasafe",
     version,
-    about = "Inspect, clean, and verify image metadata locally"
+    about = "Inspect, clean, and verify photo and video metadata locally"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -21,32 +24,44 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Show supported metadata checks and available EXIF fields.
+    /// Show supported metadata checks and available fields.
     Inspect {
-        /// Path to the image.
+        /// Path to a photo or video.
         file: PathBuf,
     },
     /// Write and verify a cleaned copy at a new path.
     Clean {
-        /// Path to the source image.
+        /// Path to the source photo or video.
         file: PathBuf,
-        /// Path to the new JPEG or PNG. Existing files are never replaced.
+        /// Path to the cleaned photo or video copy. Existing files are never replaced.
         #[arg(long)]
         output: PathBuf,
+        /// Keep the original encoding of a static JPEG, PNG or WebP.
+        #[arg(long)]
+        no_reencode: bool,
+        /// Remove all H.264 SEI messages. Reject detected HDR and embedded captions.
+        #[arg(long)]
+        strip_h264_sei: bool,
     },
     /// Exit with 0 if all checks pass, 1 if findings remain, or 2 on error.
     Verify {
-        /// Path to the image to verify.
+        /// Path to a photo or video to verify.
         file: PathBuf,
     },
-    /// Clean several images into a folder. Exit 1 if any file fails.
+    /// Clean several photos or videos into a folder. Exit 1 if any file fails.
     Batch {
-        /// Input image paths.
+        /// Input photo and video paths.
         #[arg(required = true)]
         files: Vec<PathBuf>,
         /// Existing output folder. Existing files are never replaced.
         #[arg(long)]
         output_dir: PathBuf,
+        /// Keep each supported file's original encoding.
+        #[arg(long)]
+        no_reencode: bool,
+        /// Remove all H.264 SEI messages. Reject detected HDR and embedded captions.
+        #[arg(long)]
+        strip_h264_sei: bool,
     },
 }
 
@@ -54,9 +69,19 @@ pub fn run() -> ExitCode {
     let command = Cli::parse().command;
     let result = match &command {
         Command::Inspect { file } => core::inspect(file),
-        Command::Clean { file, output } => core::clean(file, output),
+        Command::Clean {
+            file,
+            output,
+            no_reencode,
+            strip_h264_sei,
+        } => core::clean_with_options(file, output, clean_mode(*no_reencode), *strip_h264_sei),
         Command::Verify { file } => core::verify(file),
-        Command::Batch { files, output_dir } => return run_batch(files, output_dir),
+        Command::Batch {
+            files,
+            output_dir,
+            no_reencode,
+            strip_h264_sei,
+        } => return run_batch(files, output_dir, clean_mode(*no_reencode), *strip_h264_sei),
     };
 
     let report = match result {
@@ -89,15 +114,29 @@ fn command_error(error: &core::Error) -> ExitCode {
     ExitCode::from(2)
 }
 
-fn run_batch(files: &[PathBuf], output_dir: &Path) -> ExitCode {
+fn clean_mode(no_reencode: bool) -> CleanMode {
+    if no_reencode {
+        CleanMode::KeepEncoding
+    } else {
+        CleanMode::Reencode
+    }
+}
+
+fn run_batch(
+    files: &[PathBuf],
+    output_dir: &Path,
+    mode: CleanMode,
+    strip_h264_sei: bool,
+) -> ExitCode {
     let mut completed = 0;
-    let report = match core::batch_clean(files, output_dir, |_| {
-        completed += 1;
-        let _ = writeln!(io::stderr().lock(), "[{completed}/{}]", files.len());
-    }) {
-        Ok(report) => report,
-        Err(error) => return command_error(&error),
-    };
+    let report =
+        match core::batch_clean_with_options(files, output_dir, mode, strip_h264_sei, |_| {
+            completed += 1;
+            let _ = writeln!(io::stderr().lock(), "[{completed}/{}]", files.len());
+        }) {
+            Ok(report) => report,
+            Err(error) => return command_error(&error),
+        };
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
     let mut passed = 0;
@@ -145,9 +184,15 @@ fn write_report(output: &mut impl Write, command: &Command, report: &Report) -> 
     writeln!(output, "MetaSafe — {title}")?;
     writeln!(output, "File: {}", TerminalText(&file.to_string_lossy()))?;
     writeln!(output, "Format: {}", report.format)?;
+    let video = core::video::is_video(file);
     writeln!(output, "Metadata checks:")?;
     for check in &report.checks {
-        writeln!(output, "  {}: {}", check.kind, check.status)?;
+        let label = match (video, check.kind) {
+            (true, MetadataKind::Comment) => "Title, description and comments".to_owned(),
+            (true, MetadataKind::Unknown) => "Other container and track metadata".to_owned(),
+            _ => check.kind.to_string(),
+        };
+        writeln!(output, "  {label}: {}", check.status)?;
     }
 
     if matches!(command, Command::Inspect { .. }) {
@@ -166,6 +211,16 @@ fn write_report(output: &mut impl Write, command: &Command, report: &Report) -> 
                 )?;
             }
         }
+        if video {
+            for field in &report.details {
+                writeln!(
+                    output,
+                    "  {}: {}",
+                    TerminalText(&field.name),
+                    TerminalText(&field.value)
+                )?;
+            }
+        }
         if report.exif_fields_truncated {
             writeln!(
                 output,
@@ -179,10 +234,17 @@ fn write_report(output: &mut impl Write, command: &Command, report: &Report) -> 
             "Metadata was detected or at least one check was incomplete."
         };
         writeln!(output, "{summary}")?;
-        writeln!(
-            output,
-            "Photo content can still reveal personal information. This report does not guarantee anonymity."
-        )?;
+        if video {
+            writeln!(
+                output,
+                "Verification covers supported container and stream tags. Encoded content, subtitles and in-stream data can still reveal personal information."
+            )?;
+        } else {
+            writeln!(
+                output,
+                "Photo content can still reveal personal information. This report does not guarantee anonymity."
+            )?;
+        }
     }
 
     output.flush()
