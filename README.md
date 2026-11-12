@@ -6,19 +6,15 @@ MetaSafe is an open-source desktop app and CLI for inspecting photo and video me
 
 ## Download
 
-[Download MetaSafe v0.6.0](https://github.com/V3rCg1/MetaSafe/releases/latest). The graphical app is now available for Linux as a Debian package. On Debian ARM64, run `sudo apt install ./MetaSafe_0.6.0_arm64.deb` in the download folder. The release assets identify each supported architecture.
+[Download MetaSafe v0.6.0](https://github.com/V3rCg1/MetaSafe/releases/latest). The desktop app is available for Linux (x64 and ARM64), Windows (x64), and macOS (Apple Silicon).
 
-### Desktop compatibility
+### Features
 
-| System | Verified in the graphical app |
-| --- | --- |
-| Debian 12 ARM64 | JPEG metadata and single save, mixed JPEG and WebM batch, MP4, MKV and WebM playback |
-| macOS Apple Silicon | JPEG metadata and single save, mixed JPEG and MP4 batch, MP4 playback. The native file picker blocked the tested MKV and WebM files |
-| Windows 11 ARM64 and Windows Server 2025 x64 | JPEG metadata and single save, mixed JPEG and MP4 batch, MP4, MKV and WebM playback |
-
-Windows checks used test builds and native dialogs. Windows 10 and the Windows installer were outside that test. Video playback depends on system codecs. Install FFmpeg and FFprobe to inspect and clean videos if they are not installed with the package.
-
-This release also addresses three findings from the Codex Security review. PNG verification detects surplus data inside IDAT, GIF verification checks animation extension structure, and the Linux player verifies requests before assigning streaming workers.
+- View photo and video metadata, including EXIF, GPS and comments when present.
+- Remove supported metadata from individual files or batches and save copies alongside or separately from the originals.
+- Clean static JPEG, PNG and WebP without re-encoding.
+- Clean MP4, MOV, MKV and WebM without re-encoding, preserving subtitle tracks and HDR signaling by default.
+- Play compatible videos in the built-in player. Playback depends on system codecs.
 
 ## Desktop app
 
@@ -97,9 +93,9 @@ Default cleanup copies encoded video, audio, and subtitle tracks to the same con
 
 ## Linux
 
-To install a local Debian build, run `sudo apt install ./MetaSafe_0.6.0_arm64.deb` from the folder containing the ARM64 package. APT installs FFmpeg and the desktop integration dependencies. Its recommended GStreamer packages broaden playback support. On Linux, the built-in player streams the selected file through a private address on the same device (`127.0.0.1`).
+Download the Linux `.deb` package for your architecture (`amd64` for x64 or `arm64` for ARM64). On systems with APT, run `sudo apt install ./MetaSafe_0.6.0_arm64.deb` from the download folder for ARM64, or use the `amd64` filename for x64. APT installs FFmpeg and the desktop integration dependencies. Its recommended GStreamer packages broaden playback support. On Linux, the built-in player streams the selected file through a private address on the same device (`127.0.0.1`).
 
-The CI workflow builds the CLI and the Tauri Debian package on Ubuntu 24.04. To build locally, install the Linux dependencies listed by [Tauri](https://v2.tauri.app/start/prerequisites/#linux), then run the Tauri steps below. For a Debian package, run `npm run tauri build -- --bundles deb` in `desktop/`. For the CLI alone, run `cargo build --release --locked --no-default-features` from the project root.
+The CI workflow builds the CLI and the Tauri `.deb` package on Ubuntu 24.04. To build locally, install the Linux dependencies listed by [Tauri](https://v2.tauri.app/start/prerequisites/#linux), then run the Tauri steps below. For a `.deb` package, run `npm run tauri build -- --bundles deb` in `desktop/`. For the CLI alone, run `cargo build --release --locked --no-default-features` from the project root.
 
 ## Run the Tauri interface
 
