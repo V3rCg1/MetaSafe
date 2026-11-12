@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{Error, clean, metadata::Report};
+use super::{Error, clean, metadata::Report, suggested_output_extension};
 
 #[derive(Debug)]
 pub struct BatchItem {
@@ -44,7 +44,8 @@ where
         let item = match source.file_stem() {
             Some(stem) if valid_output_name(stem) => {
                 let mut name = stem.to_owned();
-                name.push("_clean.jpg");
+                name.push("_clean.");
+                name.push(suggested_output_extension(source));
                 let destination = output_dir.join(name);
                 BatchItem {
                     source: source.to_owned(),

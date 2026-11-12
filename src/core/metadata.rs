@@ -68,7 +68,17 @@ pub struct ExifField {
 }
 
 #[derive(Debug)]
+pub struct MetadataDetail {
+    pub kind: MetadataKind,
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug)]
 pub struct Report {
+    pub format: String,
+    pub single_frame_export: bool,
+    pub details: Vec<MetadataDetail>,
     pub checks: Vec<Check>,
     pub exif_fields: Vec<ExifField>,
     pub orientation: Option<u16>,
@@ -87,9 +97,12 @@ impl Report {
         self.orientation_unverified
     }
 
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         use MetadataKind::*;
         Self {
+            format: "JPEG".into(),
+            single_frame_export: false,
+            details: Vec::new(),
             checks: [Exif, Gps, Xmp, Iptc, Comment, Icc, Unknown, TrailingData]
                 .into_iter()
                 .map(|kind| Check {
@@ -111,7 +124,7 @@ impl Report {
             .map_or(Status::Unverified, |check| check.status)
     }
 
-    fn record(&mut self, kind: MetadataKind, status: Status) {
+    pub(super) fn record(&mut self, kind: MetadataKind, status: Status) {
         if let Some(check) = self.checks.iter_mut().find(|check| check.kind == kind) {
             // Preserve a confirmed detection even if other segments cannot be read.
             if check.status != Status::Present {
@@ -120,7 +133,72 @@ impl Report {
         }
     }
 
-    fn inspect_exif(&mut self, payload: &[u8]) {
+    pub(super) fn add_detail(&mut self, kind: MetadataKind, name: &str, value: &str) {
+        if self.details.len() < 192 {
+            let mut bounded = BoundedValue(String::new());
+            if bounded.write_str(value).is_err() {
+                bounded.0.push('…');
+            }
+            self.details.push(MetadataDetail {
+                kind,
+                name: name.into(),
+                value: bounded.0,
+            });
+        }
+    }
+
+    pub(super) fn add_text(&mut self, kind: MetadataKind, name: &str, bytes: &[u8]) {
+        self.record(kind, Status::Present);
+        let prefix = &bytes[..bytes.len().min(MAX_EXIF_VALUE_BYTES)];
+        let mut value = String::from_utf8_lossy(prefix).into_owned();
+        if prefix.len() < bytes.len() {
+            value.push('…');
+        }
+        self.add_detail(kind, name, &value);
+    }
+
+    pub(super) fn inspect_iptc(&mut self, mut data: &[u8]) {
+        let mut found = false;
+        while let Some(header) = data.get(..5).filter(|header| header[0] == 0x1c) {
+            let length = usize::from(u16::from_be_bytes([header[3], header[4]]));
+            if length & 0x8000 != 0 {
+                break;
+            }
+            let Some(value) = data.get(5..5 + length) else {
+                break;
+            };
+            let label = match (header[1], header[2]) {
+                (2, 5) => "Object name",
+                (2, 25) => "Keywords",
+                (2, 55) => "Date created",
+                (2, 80) => "By-line",
+                (2, 90) => "City",
+                (2, 95) => "Province or state",
+                (2, 101) => "Country",
+                (2, 105) => "Headline",
+                (2, 116) => "Copyright",
+                (2, 120) => "Caption",
+                _ => "",
+            };
+            let tag = format!("IPTC {}:{}", header[1], header[2]);
+            self.add_text(
+                MetadataKind::Iptc,
+                if label.is_empty() { &tag } else { label },
+                value,
+            );
+            data = &data[5 + length..];
+            found = true;
+        }
+        if !found || !data.is_empty() {
+            self.add_detail(
+                MetadataKind::Iptc,
+                "IPTC data",
+                &format!("{} additional bytes", data.len()),
+            );
+        }
+    }
+
+    pub(super) fn inspect_exif(&mut self, payload: &[u8]) {
         if self.status(MetadataKind::Exif) != Status::NotDetected {
             self.orientation = None;
             self.orientation_unverified = true;
@@ -163,6 +241,16 @@ impl Report {
             }
         }
 
+        for field in exif.fields().take(MAX_EXIF_FIELDS) {
+            let kind = if field.tag.context() == Context::Gps {
+                MetadataKind::Gps
+            } else {
+                MetadataKind::Exif
+            };
+            let mut value = BoundedValue(String::new());
+            let _ = write!(value, "{}", field.display_value());
+            self.add_detail(kind, &field.tag.to_string(), &value.0);
+        }
         self.exif_fields_truncated = exif.fields().count() > MAX_EXIF_FIELDS;
         self.exif_fields = exif
             .fields()
@@ -301,6 +389,8 @@ pub enum ScanError {
     NotJpeg,
     #[error("invalid or truncated JPEG marker stream")]
     InvalidJpeg,
+    #[error("invalid or truncated image container")]
+    InvalidContainer,
     #[error("JPEG has too many markers")]
     MarkerLimit,
 }
@@ -324,6 +414,11 @@ pub fn scan(input: &[u8]) -> Result<Report, ScanError> {
             0xd9 if saw_frame && saw_scan => {
                 if !remaining.is_empty() {
                     report.record(MetadataKind::TrailingData, Status::Present);
+                    report.add_detail(
+                        MetadataKind::TrailingData,
+                        "Bytes",
+                        &remaining.len().to_string(),
+                    );
                 }
                 return Ok(report);
             }
@@ -367,14 +462,30 @@ pub fn scan(input: &[u8]) -> Result<Report, ScanError> {
             0xe1 if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0")
                 || payload.starts_with(b"http://ns.adobe.com/xmp/extension/\0") =>
             {
-                report.record(MetadataKind::Xmp, Status::Present);
+                let data = payload
+                    .splitn(2, |&byte| byte == 0)
+                    .nth(1)
+                    .unwrap_or_default();
+                report.add_text(MetadataKind::Xmp, "XMP", data);
             }
             0xe2 if payload.starts_with(b"ICC_PROFILE\0") => {
                 report.record(MetadataKind::Icc, Status::Present);
+                report.add_detail(
+                    MetadataKind::Icc,
+                    "ICC segment bytes",
+                    &payload.len().saturating_sub(14).to_string(),
+                );
             }
             0xed => inspect_app13(payload, &mut report),
-            0xfe => report.record(MetadataKind::Comment, Status::Present),
-            _ => report.record(MetadataKind::Unknown, Status::Present),
+            0xfe => report.add_text(MetadataKind::Comment, "Comment", payload),
+            _ => {
+                report.record(MetadataKind::Unknown, Status::Present);
+                report.add_detail(
+                    MetadataKind::Unknown,
+                    "JPEG marker",
+                    &format!("FF{marker:02X}, {} bytes", payload.len()),
+                );
+            }
         }
     }
     Err(ScanError::MarkerLimit)
@@ -463,7 +574,7 @@ fn inspect_app13(payload: &[u8], report: &mut Report) {
     };
 
     while !resources.is_empty() {
-        let Some((id, rest)) = photoshop_resource(resources) else {
+        let Some((id, data, rest)) = photoshop_resource(resources) else {
             for kind in [MetadataKind::Iptc, MetadataKind::Icc, MetadataKind::Xmp] {
                 report.record(kind, Status::Unverified);
             }
@@ -477,11 +588,20 @@ fn inspect_app13(payload: &[u8], report: &mut Report) {
             _ => MetadataKind::Unknown,
         };
         report.record(kind, Status::Present);
+        match kind {
+            MetadataKind::Xmp => report.add_text(kind, "XMP", data),
+            MetadataKind::Iptc => report.inspect_iptc(data),
+            _ => report.add_detail(
+                kind,
+                "Photoshop resource",
+                &format!("0x{id:04X}, {} bytes", data.len()),
+            ),
+        }
         resources = rest;
     }
 }
 
-fn photoshop_resource(input: &[u8]) -> Option<(u16, &[u8])> {
+fn photoshop_resource(input: &[u8]) -> Option<(u16, &[u8], &[u8])> {
     // Adobe Photoshop File Formats Specification, Image Resource Blocks.
     let body = input.strip_prefix(b"8BIM")?;
     let id = u16::from_be_bytes([*body.first()?, *body.get(1)?]);
@@ -491,7 +611,11 @@ fn photoshop_resource(input: &[u8]) -> Option<(u16, &[u8])> {
     let size = usize::try_from(u32::from_be_bytes(size_bytes)).ok()?;
     let padded_size = size.checked_add(size % 2)?;
     let end = (size_offset + 4).checked_add(padded_size)?;
-    Some((id, body.get(end..)?))
+    Some((
+        id,
+        body.get(size_offset + 4..size_offset + 4 + size)?,
+        body.get(end..)?,
+    ))
 }
 
 #[cfg(test)]

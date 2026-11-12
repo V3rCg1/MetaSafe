@@ -1,5 +1,7 @@
 mod batch;
 mod cleaner;
+mod external;
+mod formats;
 pub mod metadata;
 
 use std::{
@@ -9,7 +11,8 @@ use std::{
 };
 
 pub use batch::{BatchItem, BatchReport, batch_clean};
-pub use cleaner::{clean, preview};
+pub use cleaner::{clean, preview, suggested_output_extension};
+pub use formats::EXTENSIONS;
 use metadata::Report;
 
 pub const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
@@ -30,11 +33,19 @@ pub enum Error {
     Scan(#[from] metadata::ScanError),
     #[error("EXIF orientation could not be verified; the copy was not created")]
     UnverifiedOrientation,
-    #[error("input is not JPEG")]
-    NotJpeg,
+    #[error("unsupported image format")]
+    UnsupportedFormat,
+    #[error("install {0} to process this image format")]
+    MissingTool(&'static str),
+    #[error("image tool failed: {0}")]
+    ExternalTool(String),
+    #[error("use .png, .jpg or .jpeg for the cleaned copy")]
+    UnsupportedOutputFormat,
+    #[error("JPEG cannot preserve transparency; save a PNG copy")]
+    TransparentJpeg,
     #[error("image dimensions {0} × {1} exceed the pixel limit")]
     PixelLimit(u32, u32),
-    #[error("could not process JPEG pixels: {0}")]
+    #[error("could not process image pixels: {0}")]
     Image(#[from] image::ImageError),
     #[error("output already exists: {0:?}")]
     OutputExists(PathBuf),
@@ -63,14 +74,12 @@ pub enum Error {
 }
 
 pub fn inspect(path: &Path) -> Result<Report, Error> {
-    Ok(metadata::scan(&read_file(path)?)?)
+    Ok(formats::read_image(&read_file(path)?, path, false)?.0)
 }
 
 pub fn verify(path: &Path) -> Result<Report, Error> {
     let bytes = read_file(path)?;
-    let report = metadata::scan(&bytes)?;
-    cleaner::decode_jpeg(&bytes)?;
-    Ok(report)
+    Ok(formats::read_image(&bytes, path, true)?.0)
 }
 
 fn read_file(path: &Path) -> Result<Vec<u8>, Error> {

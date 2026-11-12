@@ -84,10 +84,10 @@ impl Locale {
                         "This image exceeds the processing limits.",
                         "Изображение превышает ограничения обработки.",
                     ),
-                    core::Error::Scan(_) | core::Error::NotJpeg | core::Error::Image(_) => self
+                    core::Error::Scan(_) | core::Error::UnsupportedFormat | core::Error::Image(_) => self
                         .pick(
-                            "Could not read this JPEG.",
-                            "Не удалось прочитать этот JPEG.",
+                            "Could not read this image.",
+                            "Не удалось прочитать изображение.",
                         ),
                     core::Error::UnverifiedOrientation => self.pick(
                         "Could not verify EXIF orientation.",
@@ -255,8 +255,8 @@ impl MetaSafe {
 
     fn open(&mut self, ctx: &Context) {
         let dialog = rfd::FileDialog::new()
-            .set_title(self.locale.pick("Open JPEG files", "Открыть JPEG"))
-            .add_filter("JPEG", &["jpeg", "jpg"]);
+            .set_title(self.locale.pick("Open images", "Открыть фото"))
+            .add_filter("Images", core::EXTENSIONS);
         if let Some(paths) = dialog.pick_files() {
             self.set_paths(ctx, paths);
         }
@@ -286,8 +286,9 @@ impl MetaSafe {
     fn save(&mut self, ctx: &Context) {
         if self.paths.len() == 1 {
             let source = self.paths[0].clone();
+            let extension = core::suggested_output_extension(&source);
             let suggested = format!(
-                "{}_clean.jpg",
+                "{}_clean.{extension}",
                 source.file_stem().unwrap_or_default().to_string_lossy()
             );
             let mut dialog = rfd::FileDialog::new()
@@ -295,31 +296,14 @@ impl MetaSafe {
                     self.locale
                         .pick("Create cleaned copy", "Создать очищенную копию"),
                 )
-                .add_filter("JPEG", &["jpg", "jpeg"])
+                .add_filter("Image copy", &[extension])
                 .set_file_name(suggested);
             if let Some(parent) = source.parent() {
                 dialog = dialog.set_directory(parent);
             }
             if let Some(mut path) = dialog.save_file() {
                 if path.extension().is_none() {
-                    path.set_extension("jpg");
-                }
-                if !path
-                    .extension()
-                    .and_then(|value| value.to_str())
-                    .is_some_and(|value| {
-                        value.eq_ignore_ascii_case("jpg") || value.eq_ignore_ascii_case("jpeg")
-                    })
-                {
-                    self.error = Some(
-                        self.locale
-                            .pick(
-                                "Use a .jpg or .jpeg file name.",
-                                "Укажите имя с расширением .jpg или .jpeg.",
-                            )
-                            .to_owned(),
-                    );
-                    return;
+                    path.set_extension(extension);
                 }
                 self.outcomes.clear();
                 self.progress = 0;
@@ -539,7 +523,7 @@ impl eframe::App for MetaSafe {
                 if ui
                     .add_enabled(
                         !busy,
-                        egui::Button::new(locale.pick("Open JPEG", "Открыть JPEG")),
+                        egui::Button::new(locale.pick("Open photos", "Открыть фото")),
                     )
                     .clicked()
                 {
@@ -598,7 +582,7 @@ impl eframe::App for MetaSafe {
                 if self.paths.is_empty() {
                     ui.vertical_centered(|ui| {
                         ui.add_space(56.0);
-                        ui.heading(locale.pick("Drop JPEG files here", "Перетащите JPEG сюда"));
+                        ui.heading(locale.pick("Drop photos here", "Перетащите фотографии сюда"));
                         ui.label(locale.pick(
                             "Or select photos in the file picker.",
                             "Или выберите фотографии в диалоге.",

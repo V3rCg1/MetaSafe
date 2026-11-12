@@ -12,7 +12,7 @@ use metasafe::core::{self, metadata::Report};
 #[command(
     name = "metasafe",
     version,
-    about = "Inspect, clean, and verify JPEG metadata locally"
+    about = "Inspect, clean, and verify image metadata locally"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -23,25 +23,25 @@ struct Cli {
 enum Command {
     /// Show supported metadata checks and available EXIF fields.
     Inspect {
-        /// Path to the JPEG.
+        /// Path to the image.
         file: PathBuf,
     },
     /// Write and verify a cleaned copy at a new path.
     Clean {
-        /// Path to the source JPEG.
+        /// Path to the source image.
         file: PathBuf,
-        /// Path to the new JPEG. Existing files are never replaced.
+        /// Path to the new JPEG or PNG. Existing files are never replaced.
         #[arg(long)]
         output: PathBuf,
     },
     /// Exit with 0 if all checks pass, 1 if findings remain, or 2 on error.
     Verify {
-        /// Path to the JPEG to verify.
+        /// Path to the image to verify.
         file: PathBuf,
     },
-    /// Clean several JPEG files into a folder. Exit 1 if any file fails.
+    /// Clean several images into a folder. Exit 1 if any file fails.
     Batch {
-        /// Input JPEG paths.
+        /// Input image paths.
         #[arg(required = true)]
         files: Vec<PathBuf>,
         /// Existing output folder. Existing files are never replaced.
@@ -144,7 +144,7 @@ fn write_report(output: &mut impl Write, command: &Command, report: &Report) -> 
     };
     writeln!(output, "MetaSafe — {title}")?;
     writeln!(output, "File: {}", TerminalText(&file.to_string_lossy()))?;
-    writeln!(output, "Format: JPEG")?;
+    writeln!(output, "Format: {}", report.format)?;
     writeln!(output, "Metadata checks:")?;
     for check in &report.checks {
         writeln!(output, "  {}: {}", check.kind, check.status)?;
@@ -188,7 +188,7 @@ fn write_report(output: &mut impl Write, command: &Command, report: &Report) -> 
     output.flush()
 }
 
-// JPEG metadata and file names may contain terminal escape sequences or line breaks.
+// image metadata and file names may contain terminal escape sequences or line breaks.
 struct TerminalText<'a>(&'a str);
 
 impl Display for TerminalText<'_> {

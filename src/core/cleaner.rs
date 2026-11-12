@@ -1,24 +1,20 @@
 use std::{
-    io::{self, BufWriter, Cursor, Read, Seek, Write},
+    io::{self, BufWriter, Read, Seek, Write},
     path::Path,
 };
 
 use image::{
-    DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits, codecs::jpeg::JpegEncoder,
+    DynamicImage, ImageFormat,
+    codecs::{jpeg::JpegEncoder, png::PngEncoder},
     metadata::Orientation,
 };
 use tempfile::NamedTempFile;
 
 use super::{
-    Error, MAX_FILE_BYTES,
-    batch::valid_output_name,
-    metadata::{self, Report},
-    open_regular_file, read_file,
+    Error, MAX_FILE_BYTES, batch::valid_output_name, formats, metadata::Report, open_regular_file,
+    read_file,
 };
 
-const MAX_SIDE: u32 = 16_384;
-const MAX_PIXELS: u64 = 40_000_000;
-const MAX_DECODE_BYTES: u64 = 256 * 1024 * 1024;
 const JPEG_QUALITY: u8 = 90;
 const PREVIEW_SIDE: u32 = 1_280;
 
@@ -27,14 +23,32 @@ pub fn clean(source: &Path, destination: &Path) -> Result<Report, Error> {
         return Err(Error::InvalidDestinationName(destination.to_owned()));
     }
     let bytes = read_file(source)?;
-    let report = metadata::scan(&bytes)?;
+    let (report, image) = formats::read_image(&bytes, source, true)?;
     if report.orientation_unverified() {
         return Err(Error::UnverifiedOrientation);
     }
-    let mut image = decode_jpeg(&bytes)?;
+    let mut image = image.expect("pixels requested");
     // Apply the same orientation reported by the EXIF scanner to the decoded pixels.
     image.apply_orientation(orientation(&report));
     drop(bytes);
+    let format = match destination
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("jpg" | "jpeg") => ImageFormat::Jpeg,
+        Some("png") => ImageFormat::Png,
+        None if report.format == "JPEG" => ImageFormat::Jpeg,
+        _ => return Err(Error::UnsupportedOutputFormat),
+    };
+
+    if format == ImageFormat::Jpeg
+        && image.color().has_alpha()
+        && image.to_rgba8().pixels().any(|pixel| pixel.0[3] != 255)
+    {
+        return Err(Error::TransparentJpeg);
+    }
 
     let parent = destination
         .parent()
@@ -51,15 +65,12 @@ pub fn clean(source: &Path, destination: &Path) -> Result<Report, Error> {
     let mut temporary = NamedTempFile::new_in(parent).map_err(write_error)?;
     {
         let mut writer = BufWriter::new(temporary.as_file_mut());
-        JpegEncoder::new_with_quality(&mut writer, JPEG_QUALITY)
-            .encode_image(&image)
-            .map_err(|error| match error {
-                image::ImageError::IoError(source) => write_error(source),
-                error => Error::Image(error),
-            })?;
+        encode(image, format, &mut writer).map_err(|error| match error {
+            image::ImageError::IoError(source) => write_error(source),
+            error => Error::Image(error),
+        })?;
         writer.flush().map_err(write_error)?;
     }
-    drop(image);
     let file = temporary.as_file_mut();
     file.rewind().map_err(write_error)?;
     let mut encoded = Vec::new();
@@ -69,11 +80,10 @@ pub fn clean(source: &Path, destination: &Path) -> Result<Report, Error> {
     if encoded.len() as u64 > MAX_FILE_BYTES {
         return Err(Error::FileTooLarge(destination.to_path_buf()));
     }
-    let report = metadata::scan(&encoded)?;
+    let (report, _) = formats::read_image(&encoded, destination, true)?;
     if !report.passed() {
         return Err(Error::VerificationFailed);
     }
-    decode_jpeg(&encoded)?;
     temporary.as_file().sync_all().map_err(write_error)?;
     // The no-clobber publication step owns the destination existence check.
     temporary
@@ -116,8 +126,8 @@ fn verify_published(path: &Path, expected: &[u8]) -> Result<(), Error> {
 /// Inspect the file and return a preview bounded to 1,280 pixels per side.
 pub fn preview(source: &Path) -> Result<(Report, image::RgbaImage), Error> {
     let bytes = read_file(source)?;
-    let report = metadata::scan(&bytes)?;
-    let mut image = decode_jpeg(&bytes)?;
+    let (report, image) = formats::read_image(&bytes, source, true)?;
+    let mut image = image.expect("pixels requested");
     drop(bytes);
     if image.width() > PREVIEW_SIDE || image.height() > PREVIEW_SIDE {
         image = image.thumbnail(PREVIEW_SIDE, PREVIEW_SIDE);
@@ -134,25 +144,36 @@ fn orientation(report: &Report) -> Orientation {
         .unwrap_or(Orientation::NoTransforms)
 }
 
-pub(super) fn decode_jpeg(bytes: &[u8]) -> Result<DynamicImage, Error> {
-    let mut reader = ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(image::ImageError::IoError)?;
-    if reader.format() != Some(ImageFormat::Jpeg) {
-        return Err(Error::NotJpeg);
+pub fn suggested_output_extension(source: &Path) -> &'static str {
+    match source.extension().and_then(|extension| extension.to_str()) {
+        Some(extension)
+            if ["jpg", "jpeg", "jpe", "jfif"]
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate)) =>
+        {
+            "jpg"
+        }
+        _ => "png",
     }
-    let mut limits = Limits::default();
-    limits.max_image_width = Some(MAX_SIDE);
-    limits.max_image_height = Some(MAX_SIDE);
-    limits.max_alloc = Some(MAX_DECODE_BYTES);
-    reader.limits(limits);
+}
 
-    let decoder = reader.into_decoder()?;
-    let (width, height) = decoder.dimensions();
-    if u64::from(width) * u64::from(height) > MAX_PIXELS {
-        return Err(Error::PixelLimit(width, height));
+fn encode(
+    image: DynamicImage,
+    format: ImageFormat,
+    writer: &mut impl Write,
+) -> image::ImageResult<()> {
+    if format == ImageFormat::Jpeg {
+        return JpegEncoder::new_with_quality(writer, JPEG_QUALITY)
+            .encode_image(&image.into_rgb8());
     }
-    Ok(DynamicImage::from_decoder(decoder)?)
+    if matches!(
+        image.color(),
+        image::ColorType::Rgb32F | image::ColorType::Rgba32F
+    ) {
+        return DynamicImage::ImageRgba16(image.into_rgba16())
+            .write_with_encoder(PngEncoder::new(writer));
+    }
+    image.write_with_encoder(PngEncoder::new(writer))
 }
 
 #[cfg(test)]
