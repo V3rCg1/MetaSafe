@@ -109,6 +109,31 @@ jobs:
           npm ci
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           npm run tauri build -- --bundles nsis -- --locked
+      - name: Install and launch the Windows desktop package
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+          if (@($installer).Count -ne 1) { throw 'Expected exactly one NSIS package' }
+          $installDir = Join-Path $env:RUNNER_TEMP 'MetaSafe'
+          # NSIS requires the unquoted /D= argument to be last.
+          $setup = Start-Process -FilePath $installer.FullName -ArgumentList "/S /D=$installDir" -PassThru -Wait
+          if ($setup.ExitCode -ne 0) { throw "Installer exited with $($setup.ExitCode)" }
+          $installedApp = Join-Path $installDir 'metasafe-desktop.exe'
+          if (!(Test-Path -LiteralPath $installedApp -PathType Leaf)) { throw "Installed application missing at $installedApp" }
+          $process = Start-Process -FilePath $installedApp -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(30)
+            do {
+              $process.Refresh()
+              if ($process.HasExited) { throw "MetaSafe exited with $($process.ExitCode)" }
+              if ($process.MainWindowHandle -ne [IntPtr]::Zero -and $process.MainWindowTitle -eq 'MetaSafe') { break }
+              Start-Sleep -Milliseconds 250
+            } while ((Get-Date) -lt $deadline)
+            if ($process.MainWindowTitle -ne 'MetaSafe') { throw 'MetaSafe window did not appear' }
+            Write-Host 'The installed MetaSafe desktop application opened its main window.'
+          } finally {
+            if (!$process.HasExited) { Stop-Process -Id $process.Id }
+          }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: MetaSafe-Windows-desktop-x64

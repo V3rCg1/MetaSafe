@@ -281,11 +281,15 @@ fn outcome(source: &Path, destination: &Path, result: Result<Report, core::Error
 
 #[tauri::command]
 async fn choose_files(workspace: State<'_, Workspace>) -> AppResult<Option<SelectedFiles>> {
-    let extensions = [core::EXTENSIONS, core::video::EXTENSIONS].concat();
-    let chosen = AsyncFileDialog::new()
-        .add_filter("Photos and videos", &extensions)
-        .pick_files()
-        .await;
+    let dialog = AsyncFileDialog::new();
+    // rfd maps extension filters to NSOpenPanel's allowed file types on macOS.
+    // Let the core identify the selected files when macOS cannot resolve a type.
+    #[cfg(not(target_os = "macos"))]
+    let dialog = {
+        let extensions = [core::EXTENSIONS, core::video::EXTENSIONS].concat();
+        dialog.add_filter("Photos and videos", &extensions)
+    };
+    let chosen = dialog.pick_files().await;
     chosen
         .map(|files| {
             workspace.replace_selection(files.iter().map(|file| file.path().to_owned()).collect())
