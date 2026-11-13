@@ -1,6 +1,9 @@
-use std::{fs, io::Cursor};
+use std::{
+    fs,
+    io::{Cursor, Write},
+};
 
-use image::{DynamicImage, ImageFormat, Rgb, RgbImage, Rgba, RgbaImage};
+use image::{DynamicImage, ImageFormat, Rgb, RgbImage, Rgba, RgbaImage, metadata::Orientation};
 use metasafe::core::{
     self,
     metadata::{MetadataKind, Status},
@@ -235,4 +238,205 @@ fn no_reencode_batch_preserves_compressed_jpeg_png_and_webp() {
         assert_eq!(fs::read(&output).unwrap(), expected);
         assert!(core::verify(&output).unwrap().passed());
     }
+}
+
+fn tiff_orientation(orientation: u8) -> [u8; 26] {
+    [
+        b'I',
+        b'I',
+        42,
+        0,
+        8,
+        0,
+        0,
+        0, // Little-endian TIFF and offset to IFD0.
+        1,
+        0,
+        0x12,
+        0x01,
+        3,
+        0,
+        1,
+        0,
+        0,
+        0, // One SHORT Orientation entry.
+        orientation,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0, // Value and end of IFD chain.
+    ]
+}
+
+fn jpeg_segment(marker: u8, payload: &[u8]) -> Vec<u8> {
+    let mut segment = vec![0xff, marker];
+    segment.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+    segment.extend_from_slice(payload);
+    segment
+}
+
+fn riff_chunk(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+    let mut chunk = kind.to_vec();
+    chunk.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    chunk.extend_from_slice(payload);
+    if !payload.len().is_multiple_of(2) {
+        chunk.push(0);
+    }
+    chunk
+}
+
+fn source_webp(encoded: &[u8], orientation: u8) -> (Vec<u8>, Vec<u8>) {
+    // VP8L carries alpha, so VP8X describes the same canvas with metadata flags.
+    let mut clean = b"RIFF\0\0\0\0WEBP".to_vec();
+    clean.extend(riff_chunk(b"VP8X", &[0x10, 0, 0, 0, 11, 0, 0, 7, 0, 0]));
+    clean.extend_from_slice(&encoded[12..]);
+    let length = (clean.len() as u32 - 8).to_le_bytes();
+    clean[4..8].copy_from_slice(&length);
+    let mut tagged = clean.clone();
+    tagged[20] |= 0x2c; // ICC, EXIF and XMP flags.
+    // The profile payload is opaque to MetaSafe and serves as a synthetic tag.
+    tagged.splice(30..30, riff_chunk(b"ICCP", b"synthetic profile"));
+    tagged.extend(riff_chunk(b"EXIF", &tiff_orientation(orientation)));
+    tagged.extend(riff_chunk(
+        b"XMP ",
+        b"<x:xmpmeta xmlns:x='adobe:ns:meta/'/>",
+    ));
+    let length = (tagged.len() as u32 - 8).to_le_bytes();
+    tagged[4..8].copy_from_slice(&length);
+    (tagged, clean)
+}
+
+#[test]
+fn complex_photo_metadata_is_disclosed_and_cleaned_without_altering_sources() {
+    let directory = tempfile::tempdir().unwrap();
+    let pixels = RgbaImage::from_fn(12, 8, |x, y| Rgba([x as u8 * 12, y as u8 * 20, 150, 120]));
+    let image = DynamicImage::ImageRgba8(pixels.clone());
+    let mut png = Cursor::new(Vec::new());
+    image.write_to(&mut png, ImageFormat::Png).unwrap();
+    let clean_png = png.into_inner();
+
+    let mut compressed =
+        flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    compressed.write_all(b"Synthetic compressed note").unwrap();
+    let mut compressed_text = b"Description\0\0".to_vec();
+    compressed_text.extend(compressed.finish().unwrap());
+    let mut png_metadata = png_chunk(b"tEXt", b"Author\0Synthetic author");
+    png_metadata.extend(png_chunk(b"zTXt", &compressed_text));
+    png_metadata.extend(png_chunk(
+        b"iTXt",
+        b"XML:com.adobe.xmp\0\0\0\0\0<x:xmpmeta xmlns:x='adobe:ns:meta/'/>",
+    ));
+    let mut tagged_png = clean_png.clone();
+    tagged_png.splice(33..33, png_metadata);
+
+    let mut webp = Cursor::new(Vec::new());
+    image.write_to(&mut webp, ImageFormat::WebP).unwrap();
+    let (tagged_webp, clean_webp) = source_webp(&webp.into_inner(), 1);
+
+    let clean_jpeg = encoded(ImageFormat::Jpeg);
+    let mut tagged_jpeg = clean_jpeg.clone();
+    let mut exif = b"Exif\0\0".to_vec();
+    exif.extend_from_slice(&tiff_orientation(1));
+    let mut jpeg_metadata = jpeg_segment(0xe1, &exif);
+    jpeg_metadata.extend(jpeg_segment(
+        0xe1,
+        b"http://ns.adobe.com/xap/1.0/\0<x:xmpmeta xmlns:x='adobe:ns:meta/'/>",
+    ));
+    jpeg_metadata.extend(jpeg_segment(0xfe, b"Synthetic JPEG comment"));
+    tagged_jpeg.splice(2..2, jpeg_metadata);
+
+    for (extension, tagged, clean, groups) in [
+        (
+            "jpg",
+            tagged_jpeg,
+            clean_jpeg,
+            &[MetadataKind::Exif, MetadataKind::Xmp, MetadataKind::Comment][..],
+        ),
+        (
+            "png",
+            tagged_png,
+            clean_png,
+            &[MetadataKind::Comment, MetadataKind::Xmp][..],
+        ),
+        (
+            "webp",
+            tagged_webp,
+            clean_webp,
+            &[MetadataKind::Exif, MetadataKind::Xmp, MetadataKind::Icc][..],
+        ),
+    ] {
+        let source = directory.path().join(format!("source.{extension}"));
+        let destination = directory.path().join(format!("clean.{extension}"));
+        fs::write(&source, &tagged).unwrap();
+        let inspection = core::inspect(&source).unwrap();
+        for kind in groups {
+            assert!(
+                inspection
+                    .checks
+                    .iter()
+                    .any(|check| check.kind == *kind && check.status == Status::Present)
+            );
+        }
+        if extension == "png" {
+            for text in ["Synthetic author", "Synthetic compressed note"] {
+                assert!(inspection.details.iter().any(|detail| detail.value == text));
+            }
+        }
+        assert!(!core::verify(&source).unwrap().passed());
+        assert!(
+            core::clean_with_mode(&source, &destination, core::CleanMode::KeepEncoding)
+                .unwrap()
+                .passed()
+        );
+        assert_eq!(fs::read(&destination).unwrap(), clean);
+        let expected_pixels = if extension == "jpg" {
+            image::load_from_memory_with_format(&clean, ImageFormat::Jpeg)
+                .unwrap()
+                .into_rgba8()
+        } else {
+            pixels.clone()
+        };
+        assert_eq!(
+            image::open(&destination).unwrap().into_rgba8(),
+            expected_pixels
+        );
+        assert!(core::verify(&destination).unwrap().passed());
+        assert!(matches!(
+            core::clean_with_mode(&source, &destination, core::CleanMode::KeepEncoding),
+            Err(core::Error::OutputExists(_))
+        ));
+        assert_eq!(fs::read(&destination).unwrap(), clean);
+        assert_eq!(fs::read(&source).unwrap(), tagged);
+    }
+}
+
+#[test]
+fn webp_with_orientation_requires_pixel_transform() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source.webp");
+    let rejected = directory.path().join("lossless.webp");
+    let destination = directory.path().join("oriented.png");
+    let pixels = RgbaImage::from_fn(12, 8, |x, y| Rgba([x as u8 * 12, y as u8 * 20, 150, 120]));
+    let mut expected = DynamicImage::ImageRgba8(pixels);
+    let mut bytes = Cursor::new(Vec::new());
+    expected.write_to(&mut bytes, ImageFormat::WebP).unwrap();
+    let (tagged, _) = source_webp(&bytes.into_inner(), 6);
+    fs::write(&source, &tagged).unwrap();
+    expected.apply_orientation(Orientation::Rotate90);
+
+    assert_eq!(core::inspect(&source).unwrap().orientation, Some(6));
+    assert!(matches!(
+        core::clean_with_mode(&source, &rejected, core::CleanMode::KeepEncoding),
+        Err(core::Error::LosslessTransformRequired)
+    ));
+    assert!(!rejected.exists());
+    assert!(core::clean(&source, &destination).unwrap().passed());
+    assert_eq!(
+        image::open(&destination).unwrap().into_rgba8(),
+        expected.into_rgba8()
+    );
+    assert_eq!(fs::read(&source).unwrap(), tagged);
 }
