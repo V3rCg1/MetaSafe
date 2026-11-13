@@ -1,4 +1,4 @@
-# MetaSafe v0.6.0
+# MetaSafe v0.7.0
 
 [Русский](README.ru.md) · **English**
 
@@ -6,7 +6,7 @@ MetaSafe is an open-source desktop app and CLI for inspecting photo and video me
 
 ## Download
 
-[Download MetaSafe v0.6.0](https://github.com/V3rCg1/MetaSafe/releases/latest). The desktop app is available for Linux (x64 and ARM64), Windows (x64), and macOS (Apple Silicon).
+[Download MetaSafe v0.7.0](https://github.com/V3rCg1/MetaSafe/releases/latest). The desktop app is available for Linux (x64 and ARM64), Windows (x64), and macOS (Apple Silicon).
 
 ### Features
 
@@ -47,12 +47,18 @@ New-Item -ItemType Directory -Force cleaned
 .\metasafe.exe batch "photo 1.jpg" "photo 2.jpeg" --output-dir cleaned
 ```
 
-- `inspect` reports JPEG container metadata and EXIF fields.
+- `inspect` reports supported metadata and displays available fields.
 - `clean` applies EXIF orientation, saves and verifies a temporary copy beside the destination, then publishes it without overwriting an existing file. It returns an error if EXIF is malformed or orientation is ambiguous.
 - `verify` returns 0 if the checks pass, 1 if metadata is found or a check is incomplete, and 2 for an input, read, or decoding error.
 - `batch` returns 0 if all copies are saved, 1 if any file fails, and 2 for a command-level error such as a missing output directory.
 
-## Image formats in the current source
+## Image formats
+
+| Input | Metadata inspection and verification | Default cleaned copy in the app | Keep encoding |
+| --- | --- | --- | --- |
+| JPEG | EXIF, GPS, XMP, IPTC, comments, ICC, and unknown or trailing data | JPEG | Static JPEG with no required transforms |
+| PNG | EXIF, GPS, text, XMP, ICC, and unknown or trailing data | PNG | Static PNG with no required transforms |
+| WebP | EXIF, GPS, XMP, ICC, and unknown or trailing data | PNG | Static WebP with no required transforms |
 
 MetaSafe opens JPEG, PNG, APNG, WebP, GIF, TIFF, BMP, ICO, TGA, QOI, PNM, HDR, and supported DDS files directly. HEIC/HEIF, AVIF, PSD/PSB, JPEG 2000, JPEG XL, and supported camera RAW files use local tools.
 
@@ -93,7 +99,7 @@ Default cleanup copies encoded video, audio, and subtitle tracks to the same con
 
 ## Linux
 
-Download the Linux `.deb` package for your architecture (`amd64` for x64 or `arm64` for ARM64). On systems with APT, run `sudo apt install ./MetaSafe_0.6.0_arm64.deb` from the download folder for ARM64, or use the `amd64` filename for x64. APT installs FFmpeg and the desktop integration dependencies. Its recommended GStreamer packages broaden playback support. On Linux, the built-in player streams the selected file through a private address on the same device (`127.0.0.1`).
+Download the Linux `.deb` package for your architecture (`amd64` for x64 or `arm64` for ARM64). On systems with APT, run `sudo apt install ./MetaSafe_0.7.0_arm64.deb` from the download folder for ARM64, or use the `amd64` filename for x64. APT installs FFmpeg and the desktop integration dependencies. Its recommended GStreamer packages broaden playback support. On Linux, the built-in player streams the selected file through a private address on the same device (`127.0.0.1`).
 
 The CI workflow builds the CLI and the Tauri `.deb` package on Ubuntu 24.04. To build locally, install the Linux dependencies listed by [Tauri](https://v2.tauri.app/start/prerequisites/#linux), then run the Tauri steps below. For a `.deb` package, run `npm run tauri build -- --bundles deb` in `desktop/`. For the CLI alone, run `cargo build --release --locked --no-default-features` from the project root.
 
@@ -121,9 +127,9 @@ The binaries are written to `target/release`. You can also install both with `ca
 
 ## Verification and limits
 
-MetaSafe supports JPEG. It checks EXIF, GPS in EXIF, XMP, IPTC, JPEG comments, and ICC profiles. The report flags unrecognized segments and data after the JPEG end marker. A standard JFIF header without a thumbnail is allowed. The `verify` command also checks whether the JPEG decodes.
+Verification reports each supported check as **Found**, **Not found**, or **Unverified**. For images, `verify` also attempts to decode the file. A standard JFIF header without a thumbnail is allowed in JPEG. Format-specific checks are listed in the image table and the video section.
 
-Cleaning re-encodes the JPEG at quality 90 and removes the original ICC profile. File size, image quality, and color rendering may change. Faces, addresses, and other visible details remain in the pixels. A passing report does not establish anonymity.
+The default JPEG output uses quality 90. File size, image quality, and color rendering may change. Visible details remain in the pixels, and speech, subtitles, or other on-screen text may still disclose information. A passing report does not establish anonymity.
 
 EXIF parsing is limited to 1,024 fields, 32 TIFF directories, and an estimated 1 MiB allocation budget. If any limit is exceeded, MetaSafe marks EXIF and GPS as unverified and stops cleaning that file.
 
