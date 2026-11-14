@@ -2,13 +2,14 @@ import { Channel, convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   AlertCircle, Check, ChevronDown, FileImage, FolderOpen, Image, LockKeyhole,
-  Plus, ShieldCheck, Sparkles, Upload, Video,
+  Monitor, Moon, Plus, ShieldCheck, Sparkles, Sun, Upload, Video,
 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import "@fontsource-variable/geist";
 import "./App.css";
 
+type Theme = "system" | "light" | "dark";
 type Language = "en" | "ru";
 type Status = "clear" | "present" | "unknown";
 type Report = {
@@ -28,6 +29,7 @@ type LoadedPreview = { revision: number; index: number } & (
 
 const messages = {
   en: {
+    theme: "Theme", system: "System", light: "Light", dark: "Dark",
     workspace: "Photos and videos", open: "Open files", files: "Files", noFiles: "No files selected",
     preview: "Preview", emptyTitle: "Open a photo or video", emptyText: "Drop files here or choose them from your device.",
     metadata: "Metadata", emptyMeta: "Open a file to see which metadata it contains.",
@@ -47,6 +49,7 @@ const messages = {
     checks: { exif: "EXIF", gps: "Location", xmp: "XMP", iptc: "IPTC", comment: "Comments", icc: "ICC profile", unknown: "Other segments", trailing: "Trailing data" },
   },
   ru: {
+    theme: "Тема", system: "Системная", light: "Светлая", dark: "Тёмная",
     workspace: "Фото и видео", open: "Открыть файлы", files: "Файлы", noFiles: "Файлы не выбраны",
     preview: "Превью", emptyTitle: "Откройте фото или видео", emptyText: "Перетащите файлы сюда или выберите их на устройстве.",
     metadata: "Метаданные", emptyMeta: "Откройте файл, чтобы увидеть его метаданные.",
@@ -77,6 +80,16 @@ function preferredLanguage(): Language {
     // The system language is available even when storage is disabled.
   }
   return navigator.language.toLowerCase().startsWith("ru") ? "ru" : "en";
+}
+
+function preferredTheme(): Theme {
+  try {
+    const saved = localStorage.getItem("metasafe.theme");
+    if (saved === "light" || saved === "dark") return saved;
+  } catch {
+    // The system theme is available even when storage is disabled.
+  }
+  return "system";
 }
 
 function Checks({ report, t }: { report: Report; t: Messages }) {
@@ -129,6 +142,7 @@ function VideoPreview({ token, port, name, t }: { token: string | null; port: nu
 }
 
 export default function App() {
+  const [theme, setTheme] = useState(preferredTheme);
   const [language, setLanguage] = useState(preferredLanguage);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [index, setIndex] = useState(0);
@@ -159,6 +173,27 @@ export default function App() {
     setStripH264Sei(false);
     setError("");
   }
+
+  useLayoutEffect(() => {
+    const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
+    const applyTheme = () => {
+      document.documentElement.dataset.theme = theme === "system"
+        ? (systemTheme.matches ? "dark" : "light")
+        : theme;
+    };
+    applyTheme();
+    if (theme !== "system") return;
+    systemTheme.addEventListener("change", applyTheme);
+    return () => systemTheme.removeEventListener("change", applyTheme);
+  }, [theme]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("metasafe.theme", theme);
+    } catch {
+      // The theme switch still applies for the current window.
+    }
+  }, [theme]);
 
   useEffect(() => {
     document.documentElement.lang = language;
@@ -226,6 +261,7 @@ export default function App() {
     }
   }
 
+  const ThemeIcon = theme === "light" ? Sun : theme === "dark" ? Moon : Monitor;
   const entrance = reduceMotion ? false : { opacity: 0, y: 5 };
   const transition = { duration: reduceMotion ? 0 : 0.18 };
 
@@ -234,13 +270,18 @@ export default function App() {
       <header className="app-bar">
         <div className="brand"><span className="brand-mark"><ShieldCheck size={19} /></span>MetaSafe</div>
         <div className="bar-actions">
+          <label className="theme-picker">
+            <ThemeIcon size={14} aria-hidden="true" />
+            <select aria-label={t.theme} value={theme} onChange={(event) => setTheme(event.target.value as Theme)}>
+              <option value="system">{t.system}</option>
+              <option value="light">{t.light}</option>
+              <option value="dark">{t.dark}</option>
+            </select>
+          </label>
           <div className="languages" aria-label="Language">
             <button lang="en" aria-pressed={language === "en"} onClick={() => setLanguage("en")}>EN</button>
             <button lang="ru" aria-pressed={language === "ru"} onClick={() => setLanguage("ru")}>RU</button>
           </div>
-          <button className="button" disabled={!desktop || action !== null} onClick={openFiles}>
-            <Plus size={15} />{t.open}
-          </button>
         </div>
       </header>
 
@@ -250,7 +291,15 @@ export default function App() {
 
         <div className="workspace">
           <section className="panel file-panel" aria-labelledby="files-title">
-            <div className="panel-header"><h2 id="files-title">{t.files}</h2><span>{count}</span></div>
+            <div className="panel-header">
+              <h2 id="files-title">{t.files}{count > 0 ? <span>{count}</span> : null}</h2>
+              {count > 0 ? (
+                <button className="button file-open" aria-label={t.open} title={t.open}
+                  disabled={!desktop || action !== null} onClick={openFiles}>
+                  <Plus size={15} aria-hidden="true" />
+                </button>
+              ) : <span>{count}</span>}
+            </div>
             {selection ? (
               <ul className="file-list">
                 {selection.names.map((name, position) => (

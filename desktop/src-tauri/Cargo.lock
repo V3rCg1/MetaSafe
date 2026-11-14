@@ -2265,7 +2265,7 @@ dependencies = [
 
 [[package]]
 name = "metasafe"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "clap",
  "crc32fast",
@@ -2281,7 +2281,7 @@ dependencies = [
 
 [[package]]
 name = "metasafe-desktop"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.4.3",

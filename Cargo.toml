@@ -1,6 +1,6 @@
 [package]
 name = "metasafe"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Inspect and remove photo and video metadata locally"
