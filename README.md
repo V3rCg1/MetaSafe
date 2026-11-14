@@ -1,4 +1,4 @@
-# MetaSafe v0.7.0
+# MetaSafe v0.7.1
 
 [Русский](README.ru.md) · **English**
 
