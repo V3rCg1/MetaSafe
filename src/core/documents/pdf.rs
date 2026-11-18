@@ -298,6 +298,15 @@ pub(super) fn clean(bytes: &[u8]) -> Result<Vec<u8>, Error> {
             "PDF metadata is referenced by preserved content",
         ));
     }
+    // lopdf prunes objects without updating the size used for the fresh xref.
+    // Its plain writer skips old xref/object streams and linearization data.
+    document.max_id = document
+        .objects
+        .iter()
+        .rev()
+        .find(|(_, object)| !matches!(object.type_name(), Ok(b"ObjStm" | b"XRef" | b"Linearized")))
+        .map(|(&(number, _), _)| number)
+        .ok_or_else(|| unsupported("PDF has no surviving objects"))?;
     let mut output = Vec::new();
     document
         .save_to(&mut output)
@@ -440,6 +449,27 @@ mod tests {
                 .any(|value| value == b"Revised Author")
         );
         assert_eq!(load(&output).unwrap().revision_count(), 1);
+    }
+
+    #[test]
+    fn classic_xref_size_matches_the_highest_surviving_object() {
+        let mut document = load(&fixture(b"<root/>", false)).unwrap();
+        document.reference_table.cross_reference_type = lopdf::xref::XrefType::CrossReferenceTable;
+        let top_id = document.add_object(dictionary! {
+            "Author" => Object::string_literal("Highest object removed by cleanup"),
+        });
+        document.trailer.set("Info", top_id);
+        let mut input = Vec::new();
+        document.save_to(&mut input).unwrap();
+
+        let output = clean(&input).unwrap();
+        let copy = load(&output).unwrap();
+        let &(highest, _) = copy.objects.last_key_value().unwrap().0;
+        assert!(highest < top_id.0);
+        assert_eq!(
+            copy.trailer.get(b"Size").unwrap().as_i64().unwrap(),
+            i64::from(highest) + 1
+        );
     }
 
     #[test]
