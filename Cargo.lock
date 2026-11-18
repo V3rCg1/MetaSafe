@@ -2125,8 +2125,6 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 [[package]]
 name = "lopdf"
 version = "0.47.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6ad532ff9262dd4bfd6e085400cbb39959d48cb8d08518b01b68f77bdf6feca"
 dependencies = [
  "aes",
  "bitflags 2.13.2",
@@ -2209,7 +2207,7 @@ dependencies = [
 
 [[package]]
 name = "metasafe"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "clap",
  "crc32fast",

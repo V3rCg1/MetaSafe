@@ -1,0 +1,2 @@
+# Upstream PDF xref fixtures contain significant trailing spaces in raw strings.
+vendor/lopdf/src/reader.rs whitespace=-blank-at-eol

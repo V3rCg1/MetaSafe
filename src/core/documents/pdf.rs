@@ -10,6 +10,7 @@ use super::super::{
 use super::{report, unsupported};
 
 const STREAM_LIMIT: usize = 8 * 1024 * 1024;
+const TOTAL_DECODE_LIMIT: usize = 64 * 1024 * 1024;
 const XMP_LIMIT: usize = 1024 * 1024;
 const MAX_DEPTH: usize = 64;
 
@@ -20,6 +21,7 @@ fn load(bytes: &[u8]) -> Result<Document, Error> {
         LoadOptions {
             strict: true,
             max_decompressed_size: Some(STREAM_LIMIT),
+            max_total_decompressed_size: Some(TOTAL_DECODE_LIMIT),
             ..Default::default()
         },
     )
