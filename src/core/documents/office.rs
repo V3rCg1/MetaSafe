@@ -636,8 +636,49 @@ pub(super) fn inspect(bytes: &[u8], format: &str) -> Result<Report, Error> {
     Ok(result)
 }
 
+fn word_field_attribute(tag: &BytesStart<'_>, local: &str) -> Result<String, Error> {
+    // Attribute prefixes are arbitrary. Match the local name conservatively.
+    let attrs = attributes(tag)?;
+    let mut matches = attrs
+        .into_iter()
+        .filter(|(name, _)| name.rsplit(':').next() == Some(local));
+    let (_, value) = matches.next().ok_or_else(invalid)?;
+    if matches.next().is_some() {
+        return Err(invalid());
+    }
+    Ok(value)
+}
+
+fn uses_word_properties(instruction: &str) -> bool {
+    // Microsoft documents property-backed fields alongside DOCPROPERTY at
+    // https://support.microsoft.com/en-us/word/list-of-field-codes-in-word.
+    let command = instruction
+        .trim_start()
+        .split(|ch: char| ch.is_whitespace() || ch == '\\')
+        .next()
+        .unwrap_or_default();
+    matches!(
+        command.to_ascii_uppercase().as_str(),
+        "AUTHOR"
+            | "COMMENTS"
+            | "CREATEDATE"
+            | "DOCPROPERTY"
+            | "EDITTIME"
+            | "INFO"
+            | "KEYWORDS"
+            | "LASTSAVEDBY"
+            | "PRINTDATE"
+            | "REVNUM"
+            | "SAVEDATE"
+            | "SUBJECT"
+            | "TITLE"
+    )
+}
+
 fn word_property_field(bytes: &[u8]) -> Result<bool, Error> {
-    let mut instruction = String::new();
+    let mut fields = Vec::<String>::new();
+    let mut orphan = String::new();
+    let mut collected_bytes = 0;
     let mut collecting = false;
     let mut dependency = false;
     walk_xml(bytes, |event| {
@@ -648,38 +689,46 @@ fn word_property_field(bytes: &[u8]) -> Result<bool, Error> {
                 tag,
                 ..
             } => {
-                // Attribute prefixes are arbitrary. Match the local name conservatively.
-                let attributes = attributes(&tag)?;
-                let instructions: Vec<_> = attributes
-                    .iter()
-                    .filter(|(name, _)| name.rsplit(':').next() == Some("instr"))
-                    .collect();
-                dependency |= instructions.len() != 1
-                    || instructions[0]
-                        .1
-                        .trim_start()
-                        .split_ascii_whitespace()
-                        .next()
-                        .is_some_and(|name| name.eq_ignore_ascii_case("DOCPROPERTY"));
+                dependency |= uses_word_properties(&word_field_attribute(&tag, "instr")?);
             }
+            Xml::Open {
+                namespace: WORD_NS,
+                name: "fldChar",
+                tag,
+                ..
+            } => match word_field_attribute(&tag, "fldCharType")?.as_str() {
+                "begin" if fields.len() < 128 => fields.push(String::new()),
+                "separate" => {
+                    dependency |= fields
+                        .last()
+                        .is_none_or(|field| uses_word_properties(field));
+                }
+                "end" => {
+                    dependency |= fields
+                        .pop()
+                        .is_none_or(|field| uses_word_properties(&field));
+                }
+                _ => return Err(invalid()),
+            },
             Xml::Open {
                 namespace: WORD_NS,
                 name: "instrText",
                 ..
             } => collecting = true,
             Xml::Text(text) if collecting => {
-                // A complex field may split its instruction across XML runs.
-                instruction.push_str(text);
-                if instruction.len() > MAX_CONTROL_XML {
+                collected_bytes += text.len();
+                if collected_bytes > MAX_CONTROL_XML {
                     return Err(unsupported("Office field instruction is too large"));
                 }
+                // The instruction can span runs, but separate complex fields have independent commands.
+                fields.last_mut().unwrap_or(&mut orphan).push_str(text);
             }
             Xml::Close { .. } => collecting = false,
             _ => {}
         }
         Ok(())
     })?;
-    Ok(dependency || instruction.to_ascii_uppercase().contains("DOCPROPERTY"))
+    Ok(dependency || !fields.is_empty() || !orphan.trim().is_empty())
 }
 
 // Resolve POSIX-style OPC paths without opening anything outside the package.
@@ -909,6 +958,10 @@ mod tests {
     fn refuses_word_property_field_dependencies() {
         for instruction in [
             r#"<w:fldSimple w:instr=" DOCPROPERTY Author "/>"#,
+            r#"<w:fldSimple w:instr=" aUtHoR \* MERGEFORMAT "/>"#,
+            r#"<w:fldSimple w:instr=" INFO Title "/>"#,
+            r#"<w:fldSimple w:instr=" PRINTDATE "/>"#,
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>DATE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>Sub</w:instrText></w:r><w:r><w:instrText>ject</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
             r#"<w:r><w:instrText> DOC</w:instrText></w:r><w:r><w:instrText>PROPERTY Project </w:instrText></w:r>"#,
         ] {
             let header = format!(r#"<w:hdr xmlns:w="{WORD_NS}">{instruction}</w:hdr>"#);
@@ -921,6 +974,19 @@ mod tests {
                     .contains("depend")
             );
         }
+    }
+
+    #[test]
+    fn preserves_unrelated_word_fields() {
+        let header = format!(
+            r#"<w:hdr xmlns:w="{WORD_NS}"><w:fldSimple w:instr=" PAGE "/><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>DATE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:hdr>"#
+        );
+        let original = fixture("DOCX", WORD, Some(("word/header1.xml", &header)));
+        let cleaned = clean(&original, "DOCX").unwrap();
+        assert_eq!(
+            read_parts(&cleaned).unwrap()["word/header1.xml"].bytes,
+            header.as_bytes()
+        );
     }
 
     #[test]
