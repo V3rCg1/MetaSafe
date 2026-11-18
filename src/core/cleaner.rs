@@ -1,4 +1,5 @@
 use std::{
+    fs::File,
     io::{self, BufWriter, Read, Seek, Write},
     path::Path,
 };
@@ -51,6 +52,20 @@ pub fn clean_with_options(
     }
 
     let bytes = read_file(source)?;
+    if let Some(format) = super::documents::extension(source) {
+        if super::documents::extension(destination) != Some(format) {
+            return Err(super::documents::unsupported(
+                "use the same document format for the cleaned copy",
+            ));
+        }
+        let copy = super::documents::clean(&bytes, format)?;
+        drop(bytes);
+        return write_verified_copy(
+            destination,
+            |writer| writer.write_all(&copy).map_err(image::ImageError::IoError),
+            |encoded| super::documents::inspect(encoded, format),
+        );
+    }
     let input_format = image::guess_format(&bytes).ok();
     let extension = destination
         .extension()
@@ -93,6 +108,21 @@ pub fn clean_with_options(
     };
     drop(bytes);
 
+    write_verified_copy(
+        destination,
+        |writer| match copy {
+            Some(copy) => writer.write_all(&copy).map_err(image::ImageError::IoError),
+            None => encode(image, format, writer),
+        },
+        |encoded| Ok(formats::read_image(encoded, destination, true)?.0),
+    )
+}
+
+fn write_verified_copy(
+    destination: &Path,
+    write: impl FnOnce(&mut BufWriter<&mut File>) -> image::ImageResult<()>,
+    verify: impl FnOnce(&[u8]) -> Result<Report, Error>,
+) -> Result<Report, Error> {
     let parent = destination
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -108,15 +138,10 @@ pub fn clean_with_options(
     let mut temporary = NamedTempFile::new_in(parent).map_err(write_error)?;
     {
         let mut writer = BufWriter::new(temporary.as_file_mut());
-        if let Some(copy) = copy {
-            drop(image);
-            writer.write_all(&copy).map_err(write_error)?;
-        } else {
-            encode(image, format, &mut writer).map_err(|error| match error {
-                image::ImageError::IoError(source) => write_error(source),
-                error => Error::Image(error),
-            })?;
-        }
+        write(&mut writer).map_err(|error| match error {
+            image::ImageError::IoError(source) => write_error(source),
+            error => Error::Image(error),
+        })?;
         writer.flush().map_err(write_error)?;
     }
     let file = temporary.as_file_mut();
@@ -128,7 +153,7 @@ pub fn clean_with_options(
     if encoded.len() as u64 > MAX_FILE_BYTES {
         return Err(Error::FileTooLarge(destination.to_path_buf()));
     }
-    let (report, _) = formats::read_image(&encoded, destination, true)?;
+    let report = verify(&encoded)?;
     if !report.passed() {
         return Err(Error::VerificationFailed);
     }
@@ -197,6 +222,9 @@ pub fn suggested_output_extension(source: &Path) -> &'static str {
 }
 
 pub fn suggested_output_extension_for_mode(source: &Path, mode: CleanMode) -> &'static str {
+    if let Some(format) = super::documents::extension(source) {
+        return format;
+    }
     if let Some(extension) = source.extension().and_then(|ext| ext.to_str())
         && let Some(format) = super::video::EXTENSIONS
             .iter()

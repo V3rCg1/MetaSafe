@@ -20,6 +20,11 @@ pub enum MetadataKind {
     Icc,
     Unknown,
     TrailingData,
+    DocumentInfo,
+    DocumentXmp,
+    OfficeCore,
+    OfficeExtended,
+    OfficeCustom,
 }
 
 impl fmt::Display for MetadataKind {
@@ -33,6 +38,11 @@ impl fmt::Display for MetadataKind {
             Self::Icc => "ICC profile",
             Self::Unknown => "Unclassified JPEG segments",
             Self::TrailingData => "Data after JPEG end marker",
+            Self::DocumentInfo => "PDF document properties",
+            Self::DocumentXmp => "PDF document XMP",
+            Self::OfficeCore => "Office core properties",
+            Self::OfficeExtended => "Office extended properties",
+            Self::OfficeCustom => "Office custom properties",
         })
     }
 }

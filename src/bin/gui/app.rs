@@ -55,6 +55,11 @@ impl Locale {
             Icc => self.pick("ICC profile", "Профиль ICC"),
             Unknown => self.pick("Other JPEG segments", "Другие сегменты JPEG"),
             TrailingData => self.pick("Data after JPEG end", "Данные после конца JPEG"),
+            DocumentInfo => "PDF document properties",
+            DocumentXmp => "PDF document XMP",
+            OfficeCore => "Office core properties",
+            OfficeExtended => "Office extended properties",
+            OfficeCustom => "Office custom properties",
         }
     }
 
