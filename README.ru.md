@@ -6,7 +6,7 @@ MetaSafe — приложение и CLI с открытым исходным к
 
 ## Скачать
 
-[Скачать последний релиз](https://github.com/V3rCg1/MetaSafe/releases/latest). Графическое приложение доступно для Linux (x64 и ARM64), Windows (x64) и macOS (Apple Silicon).
+[Скачать MetaSafe v0.8.0](https://github.com/V3rCg1/MetaSafe/releases/tag/v0.8.0). Выберите архив macOS для Apple Silicon, установщик Windows x64 или пакет `.deb` для Linux x64.
 
 ### Возможности
 
@@ -113,7 +113,7 @@ metasafe batch draft.docx budget.xlsx report.pdf --output-dir cleaned
 
 ## Linux
 
-Скачайте пакет Linux `.deb` для своей архитектуры (`amd64` для x64 или `arm64` для ARM64). В системах с APT выполните `sudo apt install ./MetaSafe_*_arm64.deb` из папки загрузки для ARM64. Для x64 подставьте имя файла с `amd64`. APT установит FFmpeg и зависимости для рабочего стола. Рекомендованные пакеты GStreamer расширяют поддержку воспроизведения. В Linux встроенный плеер получает выбранное видео через локальный адрес на том же устройстве (`127.0.0.1`).
+На Linux x64 с APT выполните `sudo apt install ./MetaSafe_0.8.0_amd64.deb` из папки загрузки. APT установит FFmpeg и зависимости для рабочего стола. Рекомендованные пакеты GStreamer расширяют поддержку воспроизведения. В Linux встроенный плеер получает выбранное видео через локальный адрес на том же устройстве (`127.0.0.1`).
 
 Проверки GitHub Actions собирают CLI и пакет Tauri `.deb` на Ubuntu 24.04. Для локальной сборки установите [зависимости Tauri для Linux](https://v2.tauri.app/start/prerequisites/#linux) и выполните команды из раздела ниже. Чтобы собрать пакет `.deb`, запустите `npm run tauri build -- --bundles deb` в папке `desktop/`. Для CLI выполните `cargo build --release --locked --no-default-features` в корне проекта.
 

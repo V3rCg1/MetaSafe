@@ -6,7 +6,7 @@ MetaSafe is an open-source desktop app and CLI for inspecting photo, video and d
 
 ## Download
 
-[Download the latest release](https://github.com/V3rCg1/MetaSafe/releases/latest). The desktop app is available for Linux (x64 and ARM64), Windows (x64), and macOS (Apple Silicon).
+[Download MetaSafe v0.8.0](https://github.com/V3rCg1/MetaSafe/releases/tag/v0.8.0). Choose the macOS archive for Apple Silicon, the Windows x64 installer, or the Linux x64 `.deb` package.
 
 ### Features
 
@@ -113,7 +113,7 @@ PDF pages, links and form data stay in the copy. Attachments, annotations, objec
 
 ## Linux
 
-Download the Linux `.deb` package for your architecture (`amd64` for x64 or `arm64` for ARM64). On systems with APT, run `sudo apt install ./MetaSafe_*_arm64.deb` from the download folder for ARM64, or use the `amd64` filename for x64. APT installs FFmpeg and the desktop integration dependencies. Its recommended GStreamer packages broaden playback support. On Linux, the built-in player streams the selected file through a private address on the same device (`127.0.0.1`).
+On Linux x64 with APT, run `sudo apt install ./MetaSafe_0.8.0_amd64.deb` from the download folder. APT installs FFmpeg and the desktop integration dependencies. Its recommended GStreamer packages broaden playback support. On Linux, the built-in player streams the selected file through a private address on the same device (`127.0.0.1`).
 
 The CI workflow builds the CLI and the Tauri `.deb` package on Ubuntu 24.04. To build locally, install the Linux dependencies listed by [Tauri](https://v2.tauri.app/start/prerequisites/#linux), then run the Tauri steps below. For a `.deb` package, run `npm run tauri build -- --bundles deb` in `desktop/`. For the CLI alone, run `cargo build --release --locked --no-default-features` from the project root.
 
