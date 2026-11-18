@@ -1,7 +1,7 @@
 import { Channel, convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
-  AlertCircle, Check, ChevronDown, FileImage, FolderOpen, Image, LockKeyhole,
+  AlertCircle, Check, ChevronDown, FileImage, FileText, FolderOpen, Image, LockKeyhole,
   Monitor, Moon, Plus, ShieldCheck, Sparkles, Sun, Upload, Video,
 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
@@ -20,7 +20,9 @@ type Report = {
   truncated: boolean;
   orientation_unverified: boolean;
 };
-type Selection = { revision: number; names: string[]; videos: boolean[] };
+type FileKind = "image" | "video" | "document";
+type Selection = { revision: number; names: string[]; kinds: FileKind[] };
+const fileIcons = { image: FileImage, video: Video, document: FileText };
 type Preview = { image: string | null; video: string | null; video_port: number | null; report: Report };
 type Outcome = { source: string; destination: string; report: Report | null; error: string | null };
 type LoadedPreview = { revision: number; index: number } & (
@@ -30,12 +32,14 @@ type LoadedPreview = { revision: number; index: number } & (
 const messages = {
   en: {
     theme: "Theme", system: "System", light: "Light", dark: "Dark",
-    workspace: "Photos and videos", open: "Open files", files: "Files", noFiles: "No files selected",
-    preview: "Preview", emptyTitle: "Open a photo or video", emptyText: "Drop files here or choose them from your device.",
+    workspace: "Photos, videos and documents", open: "Open files", files: "Files", noFiles: "No files selected",
+    preview: "Preview", emptyTitle: "Open photos, videos or documents", emptyText: "Drop files here or choose them from your device.",
     metadata: "Metadata", emptyMeta: "Open a file to see which metadata it contains.",
     noDetails: "Individual fields are unavailable.", clear: "Not found", present: "Found", unknown: "Unverified",
     keepEncoding: "Keep encoding",
     keepEncodingHint: "Static JPEG, PNG and WebP in the original format",
+    officeScope: "Comments, revisions, hidden sheets and external links remain in the copy.",
+    pdfScope: "Attachments, annotations, form data, the file ID and page or object metadata remain in the copy.",
     videoScope: "Verification covers container and track metadata. Subtitles, picture and sound can contain personal information.",
     stripSei: "Remove H.264 SEI messages",
     stripSeiHint: "Blocked if embedded captions or HDR are detected. Other playback information may change.",
@@ -46,16 +50,18 @@ const messages = {
     results: "Verification results", saved: "Verified", failed: "Failed", folder: "Open output folder",
     noPreview: "Preview unavailable", loading: "Reading file…", browser: "Open MetaSafe in Tauri to select files.",
     orientation: "EXIF orientation could not be verified.", truncated: "Some EXIF fields were omitted or shortened.",
-    checks: { exif: "EXIF", gps: "Location", xmp: "XMP", iptc: "IPTC", comment: "Comments", icc: "ICC profile", unknown: "Other segments", trailing: "Trailing data" },
+    checks: { exif: "EXIF", gps: "Location", xmp: "XMP", iptc: "IPTC", comment: "Comments", icc: "ICC profile", unknown: "Other segments", trailing: "Trailing data", document_info: "PDF properties", document_xmp: "XMP", office_core: "Core properties", office_extended: "Extended properties", office_custom: "Custom properties" },
   },
   ru: {
     theme: "Тема", system: "Системная", light: "Светлая", dark: "Тёмная",
-    workspace: "Фото и видео", open: "Открыть файлы", files: "Файлы", noFiles: "Файлы не выбраны",
-    preview: "Превью", emptyTitle: "Откройте фото или видео", emptyText: "Перетащите файлы сюда или выберите их на устройстве.",
+    workspace: "Фото, видео и документы", open: "Открыть файлы", files: "Файлы", noFiles: "Файлы не выбраны",
+    preview: "Превью", emptyTitle: "Откройте фото, видео или документы", emptyText: "Перетащите файлы сюда или выберите их на устройстве.",
     metadata: "Метаданные", emptyMeta: "Откройте файл, чтобы увидеть его метаданные.",
     noDetails: "Отдельные поля недоступны.", clear: "Не найдено", present: "Найдено", unknown: "Не проверено",
     keepEncoding: "Без перекодирования",
     keepEncodingHint: "Статические JPEG, PNG и WebP в исходном формате",
+    officeScope: "В копии сохраняются комментарии, правки, скрытые листы и внешние ссылки.",
+    pdfScope: "В копии сохраняются вложения, аннотации, данные форм, идентификатор файла и метаданные страниц и объектов.",
     videoScope: "Проверяются метаданные контейнера и дорожек. Субтитры, изображение и звук могут содержать личные данные.",
     stripSei: "Удалить сообщения H.264 SEI",
     stripSeiHint: "При обнаружении встроенных субтитров или HDR операция блокируется. Другие данные воспроизведения могут измениться.",
@@ -66,7 +72,7 @@ const messages = {
     results: "Результаты проверки", saved: "Проверено", failed: "Ошибка", folder: "Открыть папку",
     noPreview: "Превью недоступно", loading: "Чтение файла…", browser: "Запустите MetaSafe в Tauri, чтобы выбрать файлы.",
     orientation: "Не удалось проверить ориентацию EXIF.", truncated: "Часть полей EXIF скрыта или сокращена.",
-    checks: { exif: "EXIF", gps: "Местоположение", xmp: "XMP", iptc: "IPTC", comment: "Комментарии", icc: "Профиль ICC", unknown: "Другие сегменты", trailing: "Данные после изображения" },
+    checks: { exif: "EXIF", gps: "Местоположение", xmp: "XMP", iptc: "IPTC", comment: "Комментарии", icc: "Профиль ICC", unknown: "Другие сегменты", trailing: "Данные после изображения", document_info: "Свойства PDF", document_xmp: "XMP", office_core: "Основные свойства", office_extended: "Расширенные свойства", office_custom: "Пользовательские свойства" },
   },
 } as const;
 
@@ -159,10 +165,11 @@ export default function App() {
   const revision = selection?.revision;
   const current = loaded?.revision === revision && loaded?.index === index ? loaded : null;
   const activeName = selection?.names[index];
-  const activeVideo = selection?.videos[index] ?? false;
+  const activeVideo = selection?.kinds[index] === "video";
+  const activeDocument = selection?.kinds[index] === "document";
   const count = selection?.names.length ?? 0;
-  const hasVideos = selection?.videos.some(Boolean) ?? false;
-  const hasPhotos = selection?.videos.includes(false) ?? false;
+  const hasVideos = selection?.kinds.includes("video") ?? false;
+  const hasPhotos = selection?.kinds.includes("image") ?? false;
   const saved = outcomes.filter((item) => item.report).length;
 
   function applySelection(next: Selection) {
@@ -302,14 +309,17 @@ export default function App() {
             </div>
             {selection ? (
               <ul className="file-list">
-                {selection.names.map((name, position) => (
-                  <li key={position}>
-                    <button className="file-item" aria-current={index === position ? "true" : undefined}
-                      onClick={() => setIndex(position)} title={name}>
-                      {selection.videos[position] ? <Video size={15} /> : <FileImage size={15} />}<span>{name}</span>
-                    </button>
-                  </li>
-                ))}
+                {selection.names.map((name, position) => {
+                  const FileIcon = fileIcons[selection.kinds[position]];
+                  return (
+                    <li key={position}>
+                      <button className="file-item" aria-current={index === position ? "true" : undefined}
+                        onClick={() => setIndex(position)} title={name}>
+                        <FileIcon size={15} aria-hidden="true" /><span>{name}</span>
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             ) : <p className="panel-note">{t.noFiles}</p>}
           </section>
@@ -323,6 +333,12 @@ export default function App() {
               {activeVideo && current?.data ? (
                 <VideoPreview key={`${revision}:${index}`} token={current.data.video} port={current.data.video_port}
                   name={activeName ?? t.preview} t={t} />
+              ) : activeDocument && current?.data ? (
+                <div className="stage-message">
+                  <span className="drop-icon"><FileText size={27} strokeWidth={1.4} aria-hidden="true" /></span>
+                  <strong>{current.data.report.format}</strong>
+                  <p>{activeName}</p>
+                </div>
               ) : current?.data?.image ? (
                 <motion.img key={`${revision}:${index}`} src={current.data.image} alt={activeName}
                   initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} transition={transition} />
@@ -353,6 +369,7 @@ export default function App() {
                 {current.data.report.single_frame_export ? <p className="panel-note">{t.singleFrame}</p> : null}
                 {current.data.report.orientation_unverified ? <p className="panel-note warning">{t.orientation}</p> : null}
                 {activeVideo ? <p className="panel-note">{t.videoScope}</p> : null}
+                {activeDocument ? <p className="panel-note">{current.data.report.format === "PDF" ? t.pdfScope : t.officeScope}</p> : null}
 
               </>
             ) : <p className="panel-note">{activeName && !current ? t.loading : t.emptyMeta}</p>}
@@ -401,7 +418,13 @@ export default function App() {
                   <span className="filename" title={item.source}>{item.report ? item.destination : item.source}</span>
                   <ChevronDown size={14} />
                 </summary>
-                {item.report ? <Checks report={item.report} t={t} /> : <p className="panel-note warning">{item.error}</p>}
+                {item.report ? (
+                  <>
+                    <Checks report={item.report} t={t} />
+                    {item.report.format === "PDF" ? <p className="panel-note">{t.pdfScope}</p> : null}
+                    {item.report.format === "DOCX" || item.report.format === "XLSX" ? <p className="panel-note">{t.officeScope}</p> : null}
+                  </>
+                ) : <p className="panel-note warning">{item.error}</p>}
               </details>
             ))}
           </motion.section>

@@ -15,7 +15,7 @@ use metasafe::core::{
 #[command(
     name = "metasafe",
     version,
-    about = "Inspect, clean, and verify photo and video metadata locally"
+    about = "Inspect, clean, and verify photo, video and document metadata locally"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -26,14 +26,14 @@ struct Cli {
 enum Command {
     /// Show supported metadata checks and available fields.
     Inspect {
-        /// Path to a photo or video.
+        /// Path to a photo, video or document.
         file: PathBuf,
     },
     /// Write and verify a cleaned copy at a new path.
     Clean {
-        /// Path to the source photo or video.
+        /// Path to the source photo, video or document.
         file: PathBuf,
-        /// Path to the cleaned photo or video copy. Existing files are never replaced.
+        /// Path to the cleaned copy. Existing files are never replaced.
         #[arg(long)]
         output: PathBuf,
         /// Keep the original encoding of a static JPEG, PNG or WebP.
@@ -45,12 +45,12 @@ enum Command {
     },
     /// Exit with 0 if all checks pass, 1 if findings remain, or 2 on error.
     Verify {
-        /// Path to a photo or video to verify.
+        /// Path to a photo, video or document to verify.
         file: PathBuf,
     },
-    /// Clean several photos or videos into a folder. Exit 1 if any file fails.
+    /// Clean several files into a folder. Exit 1 if any file fails.
     Batch {
-        /// Input photo and video paths.
+        /// Input photo, video and document paths.
         #[arg(required = true)]
         files: Vec<PathBuf>,
         /// Existing output folder. Existing files are never replaced.
@@ -185,6 +185,17 @@ fn write_report(output: &mut impl Write, command: &Command, report: &Report) -> 
     writeln!(output, "File: {}", TerminalText(&file.to_string_lossy()))?;
     writeln!(output, "Format: {}", report.format)?;
     let video = core::video::is_video(file);
+    match report.format.as_str() {
+        "PDF" => writeln!(
+            output,
+            "Scope: PDF document properties and document XMP. Attachments, annotations, form content, file IDs and object metadata are outside this check."
+        )?,
+        "DOCX" | "XLSX" => writeln!(
+            output,
+            "Scope: supported Office document properties. Comments, revisions, hidden sheets and external links are outside this check."
+        )?,
+        _ => (),
+    }
     writeln!(output, "Metadata checks:")?;
     for check in &report.checks {
         let label = match (video, check.kind) {
@@ -211,7 +222,7 @@ fn write_report(output: &mut impl Write, command: &Command, report: &Report) -> 
                 )?;
             }
         }
-        if video {
+        if video || core::documents::is_document(file) {
             for field in &report.details {
                 writeln!(
                     output,
@@ -239,7 +250,7 @@ fn write_report(output: &mut impl Write, command: &Command, report: &Report) -> 
                 output,
                 "Verification covers supported container and stream tags. Encoded content, subtitles and in-stream data can still reveal personal information."
             )?;
-        } else {
+        } else if !core::documents::is_document(file) {
             writeln!(
                 output,
                 "Photo content can still reveal personal information. This report does not guarantee anonymity."
@@ -250,7 +261,7 @@ fn write_report(output: &mut impl Write, command: &Command, report: &Report) -> 
     output.flush()
 }
 
-// image metadata and file names may contain terminal escape sequences or line breaks.
+// Metadata and file names may contain terminal escape sequences or line breaks.
 struct TerminalText<'a>(&'a str);
 
 impl Display for TerminalText<'_> {

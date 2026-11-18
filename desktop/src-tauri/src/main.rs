@@ -52,7 +52,15 @@ struct Selection {
 struct SelectedFiles {
     revision: u32,
     names: Vec<String>,
-    videos: Vec<bool>,
+    kinds: Vec<FileKind>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum FileKind {
+    Image,
+    Video,
+    Document,
 }
 
 struct Playback {
@@ -75,10 +83,18 @@ impl Workspace {
         Ok(SelectedFiles {
             revision: selection.revision,
             names: selection.files.iter().map(|path| filename(path)).collect(),
-            videos: selection
+            kinds: selection
                 .files
                 .iter()
-                .map(|path| core::video::is_video(path))
+                .map(|path| {
+                    if core::video::is_video(path) {
+                        FileKind::Video
+                    } else if core::documents::is_document(path) {
+                        FileKind::Document
+                    } else {
+                        FileKind::Image
+                    }
+                })
                 .collect(),
         })
     }
@@ -153,6 +169,11 @@ fn metadata_key(kind: core::metadata::MetadataKind) -> &'static str {
         Icc => "icc",
         Unknown => "unknown",
         TrailingData => "trailing",
+        DocumentInfo => "document_info",
+        DocumentXmp => "document_xmp",
+        OfficeCore => "office_core",
+        OfficeExtended => "office_extended",
+        OfficeCustom => "office_custom",
     }
 }
 
@@ -286,8 +307,13 @@ async fn choose_files(workspace: State<'_, Workspace>) -> AppResult<Option<Selec
     // Let the core identify the selected files when macOS cannot resolve a type.
     #[cfg(not(target_os = "macos"))]
     let dialog = {
-        let extensions = [core::EXTENSIONS, core::video::EXTENSIONS].concat();
-        dialog.add_filter("Photos and videos", &extensions)
+        let extensions = [
+            core::EXTENSIONS,
+            core::video::EXTENSIONS,
+            core::documents::EXTENSIONS,
+        ]
+        .concat();
+        dialog.add_filter("Photos, videos and documents", &extensions)
     };
     let chosen = dialog.pick_files().await;
     chosen
@@ -368,6 +394,15 @@ async fn preview_file(
         });
     }
     tauri::async_runtime::spawn_blocking(move || {
+        if core::documents::is_document(&path) {
+            let report = core::inspect(&path).map_err(|error| error.to_string())?;
+            return Ok(Preview {
+                image: None,
+                video: None,
+                video_port: None,
+                report: report.into(),
+            });
+        }
         let (report, rgba) = core::preview(&path).map_err(|error| error.to_string())?;
         let mut bytes = Vec::new();
         PngEncoder::new(&mut bytes)

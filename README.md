@@ -1,16 +1,17 @@
-# MetaSafe v0.7.0
+# MetaSafe v0.8.0
 
 [Русский](README.ru.md) · **English**
 
-MetaSafe is an open-source desktop app and CLI for inspecting photo and video metadata and saving verified copies. Processing stays on your device, and the originals are preserved. The source is available under the [MIT License](LICENSE).
+MetaSafe is an open-source desktop app and CLI for inspecting photo, video and document metadata and saving verified copies. Processing stays on your device, and the originals are preserved. The source is available under the [MIT License](LICENSE).
 
 ## Download
 
-[Download MetaSafe v0.7.0](https://github.com/V3rCg1/MetaSafe/releases/latest). The desktop app is available for Linux (x64 and ARM64), Windows (x64), and macOS (Apple Silicon).
+[Download the latest release](https://github.com/V3rCg1/MetaSafe/releases/latest). The desktop app is available for Linux (x64 and ARM64), Windows (x64), and macOS (Apple Silicon).
 
 ### Features
 
 - View photo and video metadata, including EXIF, GPS and comments when present.
+- View and remove supported PDF, DOCX and XLSX properties.
 - Remove supported metadata from individual files or batches and save copies alongside or separately from the originals.
 - Clean static JPEG, PNG and WebP without re-encoding.
 - Clean MP4, MOV, MKV and WebM without re-encoding, preserving subtitle tracks and HDR signaling by default.
@@ -18,8 +19,8 @@ MetaSafe is an open-source desktop app and CLI for inspecting photo and video me
 
 ## Desktop app
 
-1. In the Tauri app, click **Open files** and select photos or videos. You can also drag files into the window.
-2. Select a file to see its preview and metadata. Expand any row marked **Found** to see the values. EXIF fields can contain precise coordinates.
+1. In the Tauri app, click **Open files** and select photos, videos or documents. You can also drag files into the window.
+2. Select a file to see its metadata and a preview for supported media. Expand any row marked **Found** to see the values. EXIF fields can contain precise coordinates.
 3. Click **Create cleaned copy…** for one file and choose a name. For multiple files, click **Create cleaned copies…** and choose a destination folder.
 4. When processing finishes, expand the report for any file.
 
@@ -97,9 +98,22 @@ Default cleanup copies encoded video, audio, and subtitle tracks to the same con
 
 `--strip-h264-sei` opts into removing H.264 SEI messages from encoded packets without re-encoding. Use it only for compatible SDR H.264 input. The tool rejects detectable HDR or embedded caption signaling when filtering. H.264 SEI can carry other information too, and the filter removes all SEI messages it encounters. The video size limit is under 2 GiB and each file can contain up to 32 tracks. Large files need temporary disk space for the input snapshot and cleaned copy. The metadata report does not certify removal of private data inside encoded streams or subtitle text. Other codecs, Dolby Vision, HDR10+ and custom stream payloads do not have a general in-stream cleaner.
 
+## Documents
+
+MetaSafe shows and removes PDF document properties and catalog XMP. For DOCX and XLSX, it handles core properties, custom properties and selected extended properties such as Company and Manager. Files are processed locally. The app saves a separate copy in the same format and verifies the supported properties again before saving.
+
+```sh
+metasafe inspect draft.docx
+metasafe clean report.pdf --output report_clean.pdf
+metasafe verify report_clean.pdf
+metasafe batch draft.docx budget.xlsx report.pdf --output-dir cleaned
+```
+
+PDF pages, links and form data stay in the copy. Attachments, annotations, object metadata and PDF identifiers are outside the cleanup scope. Office document content, including comments, revisions, hidden sheets and links, is preserved. Cleanup refuses signed or encrypted files and PDF/A files. Word fields that depend on document properties can also prevent cleanup.
+
 ## Linux
 
-Download the Linux `.deb` package for your architecture (`amd64` for x64 or `arm64` for ARM64). On systems with APT, run `sudo apt install ./MetaSafe_0.7.0_arm64.deb` from the download folder for ARM64, or use the `amd64` filename for x64. APT installs FFmpeg and the desktop integration dependencies. Its recommended GStreamer packages broaden playback support. On Linux, the built-in player streams the selected file through a private address on the same device (`127.0.0.1`).
+Download the Linux `.deb` package for your architecture (`amd64` for x64 or `arm64` for ARM64). On systems with APT, run `sudo apt install ./MetaSafe_*_arm64.deb` from the download folder for ARM64, or use the `amd64` filename for x64. APT installs FFmpeg and the desktop integration dependencies. Its recommended GStreamer packages broaden playback support. On Linux, the built-in player streams the selected file through a private address on the same device (`127.0.0.1`).
 
 The CI workflow builds the CLI and the Tauri `.deb` package on Ubuntu 24.04. To build locally, install the Linux dependencies listed by [Tauri](https://v2.tauri.app/start/prerequisites/#linux), then run the Tauri steps below. For a `.deb` package, run `npm run tauri build -- --bundles deb` in `desktop/`. For the CLI alone, run `cargo build --release --locked --no-default-features` from the project root.
 

@@ -1,5 +1,6 @@
 mod batch;
 mod cleaner;
+pub mod documents;
 mod external;
 mod formats;
 mod lossless;
@@ -46,6 +47,8 @@ pub enum Error {
     MissingTool(&'static str),
     #[error("video processing failed: {0}")]
     Video(String),
+    #[error("document processing failed: {0}")]
+    Document(String),
     #[error("image tool failed: {0}")]
     ExternalTool(String),
     #[error("use .png, .jpg or .jpeg for the cleaned copy")]
@@ -94,7 +97,11 @@ pub fn inspect(path: &Path) -> Result<Report, Error> {
     if video::is_video(path) {
         return video::inspect(path);
     }
-    Ok(formats::read_image(&read_file(path)?, path, false)?.0)
+    let bytes = read_file(path)?;
+    if let Some(format) = documents::extension(path) {
+        return documents::inspect(&bytes, format);
+    }
+    Ok(formats::read_image(&bytes, path, false)?.0)
 }
 
 pub fn verify(path: &Path) -> Result<Report, Error> {
@@ -102,6 +109,9 @@ pub fn verify(path: &Path) -> Result<Report, Error> {
         return video::verify(path);
     }
     let bytes = read_file(path)?;
+    if let Some(format) = documents::extension(path) {
+        return documents::inspect(&bytes, format);
+    }
     Ok(formats::read_image(&bytes, path, true)?.0)
 }
 
